@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+@theme {
+  /* Professional Brand Colors (District/BookMyShow Style) */
+  --color-primary: #6366f1;       /* Indigo 500 */
+  --color-primary-hover: #4f46e5; /* Indigo 600 */
+  --color-primary-light: #e0e7ff; /* Indigo 100 */
+
+  --color-dark: #0f172a;          /* Slate 900 */
+  --color-dark-card: #1e293b;     /* Slate 800 */
+  --color-dark-text: #f8fafc;     /* Slate 50 */
+  --color-dark-muted: #94a3b8;    /* Slate 400 */
+
+  /* Animation Utilities */
+  --animate-fade-in: fade-in 0.5s ease-out;
+  --animate-slide-up: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+
+  @keyframes slideUp {
+    0% { opacity: 0; transform: translateY(20px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+}
+
+/* Custom Base Styles */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    /* Stops the top/bottom rubber-band bounce effect safely */
+    overscroll-behavior-y: none; 
+  }
+
+  body {
+    /* 1. KILLS HORIZONTAL SCROLLING */
+    overflow-x: hidden;
+    /* 2. EXPLICITLY ALLOWS VERTICAL SCROLLING (This fixes the lock!) */
+    overflow-y: auto; 
+    
+    width: 100%;
+    min-height: 100vh;
+    
+    /* Standard settings */
+    background-color: #f8fafc; /* Tailwind slate-50 */
+    color: #0f172a; /* Tailwind slate-900 */
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* --- GLOBAL CURSOR FIX & PHYSICS --- */
+  button, 
+  a, 
+  [role="button"], 
+  input[type="submit"], 
+  input[type="button"], 
+  input[type="reset"], 
+  label,
+  select {
+    cursor: pointer !important;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  button:active, 
+  [role="button"]:active {
+    transform: scale(0.97);
+  }
+
+  button:disabled,
+  input:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed !important;
+    opacity: 0.7;
+  }
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-slate-300);
+  border-radius: 20px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-orange-400);
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+/* Hide scrollbar for IE, Edge and Firefox */
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+/* --- PREMIUM UI UTILITIES --- */
+@layer utilities {
+  .shadow-premium {
+    box-shadow: 0 8px 30px rgb(0, 0, 0, 0.04);
+  }
+  .shadow-premium-orange {
+    box-shadow: 0 8px 30px rgba(249, 115, 22, 0.15);
+  }
+  .glass-header {
+    background-color: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid rgba(249, 115, 22, 0.1);
+  }
+}
+
+/* Animation Keyframes */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes zoom-in-95 {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+.zoom-in-95 {
+  animation: zoom-in-95 0.2s ease-out forwards;
+}
+

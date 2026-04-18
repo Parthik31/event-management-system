@@ -1,0 +1,14 @@
+# Ignore heavy folders
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Ignore secrets (CRITICAL)
+.env
+client/.env
+server/.env
+
+# Ignore build folders
+dist/
+client/dist/
+.DS_Store
