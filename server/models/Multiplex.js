@@ -29,4 +29,7 @@ const multiplexSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
+multiplexSchema.index({ owner: 1, createdAt: -1 });
+multiplexSchema.index({ city: 1, status: 1 });
+
 export default mongoose.model('Multiplex', multiplexSchema);

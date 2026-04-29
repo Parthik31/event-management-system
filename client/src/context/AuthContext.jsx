@@ -1,6 +1,6 @@
 /* eslint react-refresh/only-export-components: off */
-import React, { createContext, useContext, useEffect, useReducer } from 'react';
-import api from '../utils/Axios';
+import React, { createContext, useContext, useEffect, useReducer, useRef } from 'react';
+import api, { getCachedApi } from '../utils/Axios';
 
 const initialState = {
   user: null,
@@ -40,38 +40,47 @@ const authReducer = (state, action) => {
 
 export const AuthProvider = ({ children }) => {
   const [state, dispatch] = useReducer(authReducer, initialState);
+  const bootstrapRef = useRef(false);
+  const loadUserPromiseRef = useRef(null);
 
   const loadUser = async () => {
+    if (loadUserPromiseRef.current) {
+      return loadUserPromiseRef.current;
+    }
+
+    loadUserPromiseRef.current = (async () => {
+      try {
+        const res = await getCachedApi(
+          '/auth/me',
+          { skipAuthRedirect: true },
+          { cacheTTL: 0, dedupe: true, preferCacheOnError: false }
+        );
+        dispatch({ type: 'USER_LOADED', payload: res.data.data });
+        return { success: true, user: res.data.data };
+      } catch {
+        dispatch({ type: 'AUTH_ERROR' });
+        return { success: false };
+      } finally {
+        loadUserPromiseRef.current = null;
+      }
+    })();
+
     try {
-      const res = await api.get('/auth/me', { skipAuthRedirect: true });
-      dispatch({ type: 'USER_LOADED', payload: res.data.data });
-      return { success: true, user: res.data.data };
-    } catch {
-      dispatch({ type: 'AUTH_ERROR' });
-      return { success: false };
+      return await loadUserPromiseRef.current;
+    } finally {
+      loadUserPromiseRef.current = null;
     }
   };
 
   useEffect(() => {
-    let isMounted = true;
+    if (bootstrapRef.current) {
+      return undefined;
+    }
 
-    const bootstrapAuth = async () => {
-      try {
-        const res = await api.get('/auth/me', { skipAuthRedirect: true });
-        if (isMounted) {
-          dispatch({ type: 'USER_LOADED', payload: res.data.data });
-        }
-      } catch {
-        if (isMounted) {
-          dispatch({ type: 'AUTH_ERROR' });
-        }
-      }
-    };
+    bootstrapRef.current = true;
+    loadUser();
 
-    bootstrapAuth();
-    return () => {
-      isMounted = false;
-    };
+    return undefined;
   }, []);
 
   const clearError = () => dispatch({ type: 'CLEAR_ERROR' });

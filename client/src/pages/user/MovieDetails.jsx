@@ -5,7 +5,7 @@ import {
   PlayCircle, Star, Info, ShieldCheck, Zap, AlertCircle
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import api, { resolveMediaUrl } from '../../utils/Axios';
+import { getCachedApi, resolveMediaUrl } from '../../utils/Axios';
 import { useAuth } from '../../context/AuthContext';
 
 const formatLocalDate = (value) => {
@@ -40,7 +40,8 @@ const MovieDetails = () => {
 
   const [movie, setMovie] = useState(null);
   const [showGroups, setShowGroups] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [movieLoading, setMovieLoading] = useState(true);
+  const [showtimesLoading, setShowtimesLoading] = useState(true);
   const [resolvedCity, setResolvedCity] = useState('');
   const [selectedDate, setSelectedDate] = useState('');
 
@@ -64,37 +65,64 @@ const MovieDetails = () => {
   }, [dateList, selectedDate]);
 
   useEffect(() => {
+    let isActive = true;
+
     const fetchMovie = async () => {
       try {
-        setLoading(true);
-        const movieRes = await api.get(`/movies/${id}`);
-        if (movieRes.data.success) setMovie(movieRes.data.data);
+        if (isActive) {
+          setMovieLoading(true);
+        }
+
+        const movieRes = await getCachedApi(`/movies/${id}`, {}, { cacheTTL: 60000 });
+        if (movieRes.data.success && isActive) {
+          setMovie(movieRes.data.data);
+        }
       } catch {
-        toast.error('Failed to load movie details.');
+        if (isActive) {
+          toast.error('Failed to load movie details.');
+        }
       } finally {
-        setLoading(false);
+        if (isActive) {
+          setMovieLoading(false);
+        }
       }
     };
+
     fetchMovie();
+
+    return () => {
+      isActive = false;
+    };
   }, [id]);
 
   useEffect(() => {
     if (!movie || !selectedDate) return;
 
+    let isActive = true;
+
     const fetchShows = async () => {
       try {
-        setLoading(true);
+        if (isActive) {
+          setShowtimesLoading(true);
+        }
+
         const cityQuery = userCity && userCity !== 'All Cities' ? `city=${encodeURIComponent(userCity)}&` : '';
-        let showsRes = await api.get(`/movies/${id}/shows?${cityQuery}date=${selectedDate}`);
+        let showsRes = await getCachedApi(
+          `/movies/${id}/shows?${cityQuery}date=${selectedDate}`,
+          {},
+          { cacheTTL: 5000 }
+        );
 
         if (showsRes.data.success && (!showsRes.data.data?.length) && userCity && userCity !== 'All Cities') {
-          showsRes = await api.get(`/movies/${id}/shows?date=${selectedDate}`);
-          setResolvedCity('All Cities');
-        } else {
+          showsRes = await getCachedApi(`/movies/${id}/shows?date=${selectedDate}`, {}, { cacheTTL: 5000 });
+          if (isActive) {
+            setResolvedCity('All Cities');
+          }
+        } else if (isActive) {
           setResolvedCity(userCity || 'All Cities');
         }
 
-        if (showsRes.data.success) {
+        if (showsRes.data.success && isActive) {
           const shows = showsRes.data.data || [];
           const grouped = shows.reduce((acc, show) => {
             const mName = show.multiplex?.multiplexName || 'Unknown Cinema';
@@ -105,16 +133,24 @@ const MovieDetails = () => {
           setShowGroups(Object.values(grouped));
         }
       } catch {
-        toast.error('Failed to load showtimes.');
+        if (isActive) {
+          toast.error('Failed to load showtimes.');
+        }
       } finally {
-        setLoading(false);
+        if (isActive) {
+          setShowtimesLoading(false);
+        }
       }
     };
 
     fetchShows();
+
+    return () => {
+      isActive = false;
+    };
   }, [id, movie, selectedDate, userCity]);
 
-  if (loading && !movie) {
+  if (movieLoading && !movie) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <Loader2 className="w-12 h-12 animate-spin text-red-600" />
@@ -192,7 +228,7 @@ const MovieDetails = () => {
           </h2>
         </div>
 
-        {loading ? (
+        {showtimesLoading ? (
           <div className="flex justify-center py-10">
             <Loader2 className="w-8 h-8 animate-spin text-red-600" />
           </div>

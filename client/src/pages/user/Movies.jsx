@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Play, Star, Loader2, Film, ChevronRight, Calendar, Ticket } from 'lucide-react';
-import api, { resolveMediaUrl } from '../../utils/Axios';
+import { getCachedApi, resolveMediaUrl } from '../../utils/Axios';
 import { useAuth } from '../../context/AuthContext';
 
 const Movies = () => {
@@ -15,27 +15,53 @@ const Movies = () => {
   const [comingSoon, setComingSoon] = useState([]);
 
   useEffect(() => {
-    const fetchRealMovies = async () => {
-      setLoading(true);
-      try {
-        const { data } = await api.get(`/movies?status=Approved&city=${encodeURIComponent(userCity)}`);
+    let isActive = true;
 
-        if (data.success) {
-          const movies = data.data || [];
-          setCarouselMovies(movies); // Set all movies for the carousel
-          setNowShowing(movies.filter(m => !m.isUpcoming));
-          setComingSoon(movies.filter(m => m.isUpcoming));
+    const fetchRealMovies = async () => {
+      if (isActive) {
+        setLoading(true);
+      }
+
+      try {
+        const primaryEndpoint =
+          userCity && userCity !== 'All Cities'
+            ? `/movies?status=Approved&city=${encodeURIComponent(userCity)}`
+            : '/movies?status=Approved';
+        let response = await getCachedApi(primaryEndpoint, {}, { cacheTTL: 30000 });
+
+        if (
+          response.data.success &&
+          (!response.data.data?.length) &&
+          userCity &&
+          userCity !== 'All Cities'
+        ) {
+          response = await getCachedApi('/movies?status=Approved', {}, { cacheTTL: 30000 });
+        }
+
+        if (response.data.success && isActive) {
+          const movies = response.data.data || [];
+          setCarouselMovies(movies);
+          setNowShowing(movies.filter((movie) => !movie?.isUpcoming));
+          setComingSoon(movies.filter((movie) => movie?.isUpcoming));
         }
       } catch (error) {
         console.error("Error fetching live movies:", error);
-        setCarouselMovies([]);
-        setNowShowing([]);
-        setComingSoon([]);
+        if (isActive) {
+          setCarouselMovies([]);
+          setNowShowing([]);
+          setComingSoon([]);
+        }
       } finally {
-        setLoading(false);
+        if (isActive) {
+          setLoading(false);
+        }
       }
     };
     fetchRealMovies();
+
+    return () => {
+      isActive = false;
+    };
   }, [userCity]);
 
   // Carousel auto-slide effect

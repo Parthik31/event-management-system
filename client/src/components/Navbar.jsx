@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import api, { resolveMediaUrl } from '../utils/Axios';
+import api, { getCachedApi, resolveMediaUrl } from '../utils/Axios';
 import { 
   Search, MapPin, Menu, X, 
   ChevronDown, Ticket, Navigation, Building2,
@@ -46,6 +46,7 @@ const Navbar = () => {
   const navigate = useNavigate();
   const searchRef = useRef(null); 
   const notificationRef = useRef(null); 
+  const latestSearchQueryRef = useRef('');
   
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isCityModalOpen, setIsCityModalOpen] = useState(false);
@@ -135,19 +136,20 @@ const Navbar = () => {
   useEffect(() => {
     if (searchQuery.trim().length > 1) {
       let isActive = true;
+      const query = searchQuery.trim();
       setIsSearching(true);
       setShowResults(true);
+      latestSearchQueryRef.current = query;
       const delayDebounceFn = setTimeout(async () => {
         try {
-          const query = searchQuery.trim();
-          const { data } = await api.get(`/events/search?q=${encodeURIComponent(query)}`);
-          if (isActive) {
+          const { data } = await getCachedApi(`/events/search?q=${encodeURIComponent(query)}`, {}, { cacheTTL: 30000 });
+          if (isActive && latestSearchQueryRef.current === query) {
             setInstantResults((data.data || []).slice(0, 5));
           }
         } catch (error) {
           console.error("Search Error", error);
         } finally {
-          if (isActive) {
+          if (isActive && latestSearchQueryRef.current === query) {
             setIsSearching(false);
           }
         }

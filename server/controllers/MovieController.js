@@ -18,6 +18,22 @@ import {
   normalizeSeatCategoryPricingInput,
   normalizeShowSlotPricing
 } from '../utils/showPricing.js';
+import { clearCacheByPrefix, withCache } from '../utils/memoryCache.js';
+
+const MOVIE_LIST_SELECT =
+  'title poster banner trailers genre language duration releaseDate certificate cast description isUpcoming rating totalVotes organizer status createdAt';
+const MOVIE_DETAIL_SELECT =
+  'title poster banner trailers genre language duration releaseDate certificate cast description isUpcoming rating totalVotes organizer status createdAt updatedAt';
+const SHOW_LIST_SELECT =
+  'movie multiplex screen date waveGroupId baseStartTime startTime language format basePrice seatRowPartitions seatCategoryPricing rowCategories showSlotPricing bookedSeats';
+const MOVIE_PUBLIC_CACHE_TTL_MS = 30 * 1000;
+const MOVIE_DETAIL_CACHE_TTL_MS = 60 * 1000;
+
+const invalidateMovieCache = () => {
+  clearCacheByPrefix('movies:list:');
+  clearCacheByPrefix('movies:detail:');
+  clearCacheByPrefix('movies:showtimes:');
+};
 
 const parseListField = (value) => {
   if (!value) return [];
@@ -161,6 +177,8 @@ export const createMovie = async (req, res) => {
       isUpcoming, organizer: req.user.id, status: 'Pending' 
     });
 
+    invalidateMovieCache();
+
     res.status(201).json({ success: true, data: movie });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -199,6 +217,8 @@ export const updateMovieStatus = async (req, res) => {
     const movie = await Movie.findByIdAndUpdate(
       req.params.id, { status, isUpcoming }, { returnDocument: 'after', runValidators: true }
     );
+
+    invalidateMovieCache();
 
     res.status(200).json({ success: true, data: movie });
   } catch (error) {
@@ -278,6 +298,8 @@ export const updateMovie = async (req, res) => {
       },
       { returnDocument: 'after', runValidators: true }
     );
+
+    invalidateMovieCache();
 
     res.status(200).json({ success: true, data: movie });
   } catch (error) {
@@ -394,34 +416,67 @@ export const getMovies = async (req, res) => {
 
     if (genre) query.genre = { $in: genre.split(',') };
 
-    if (city && city !== 'All Cities') {
-        const multiplexesInCity = await Multiplex.find({
-          city: new RegExp(`^${city}$`, 'i'),
-          ...getApprovedMultiplexQuery()
-        }).select('_id');
-        const activeMovieIds = await Show.distinct('movie', {
-            multiplex: { $in: multiplexesInCity.map(m => m._id) }
-        });
-        const scheduledMovieIds = await Show.distinct('movie');
+    const cacheKey = !isAdminRequest
+      ? `movies:list:${status || 'default'}:${city || 'All Cities'}:${genre || 'all'}`
+      : null;
 
-        if (wantsAllApproved) {
-          query.$or = [
-            { isUpcoming: true },
-            { _id: { $in: activeMovieIds } },
-            { _id: { $nin: scheduledMovieIds } }
-          ];
-        } else if (query.isUpcoming === false && (activeMovieIds.length > 0 || scheduledMovieIds.length > 0)) {
-          query.$or = [
-            { _id: { $in: activeMovieIds } },
-            { _id: { $nin: scheduledMovieIds } }
-          ];
-        }
+    const payload = cacheKey
+      ? await withCache(cacheKey, MOVIE_PUBLIC_CACHE_TTL_MS, async () => {
+          const baseQuery = { ...query };
+
+          if (city && city !== 'All Cities') {
+            const multiplexesInCity = await Multiplex.find({
+              city: new RegExp(`^${city}$`, 'i'),
+              ...getApprovedMultiplexQuery()
+            })
+              .select('_id')
+              .lean();
+
+            const multiplexIds = multiplexesInCity.map((item) => item._id);
+            const [activeMovieIds, scheduledMovieIds] = await Promise.all([
+              multiplexIds.length
+                ? Show.distinct('movie', { multiplex: { $in: multiplexIds } })
+                : Promise.resolve([]),
+              Show.distinct('movie')
+            ]);
+
+            if (wantsAllApproved) {
+              baseQuery.$or = [
+                { isUpcoming: true },
+                { _id: { $in: activeMovieIds } },
+                { _id: { $nin: scheduledMovieIds } }
+              ];
+            } else if (baseQuery.isUpcoming === false && (activeMovieIds.length > 0 || scheduledMovieIds.length > 0)) {
+              baseQuery.$or = [
+                { _id: { $in: activeMovieIds } },
+                { _id: { $nin: scheduledMovieIds } }
+              ];
+            }
+          }
+
+          const movies = await Movie.find(baseQuery)
+            .select(MOVIE_LIST_SELECT)
+            .populate('organizer', 'name email companyName businessType')
+            .sort({ releaseDate: -1 })
+            .lean();
+
+          return { success: true, count: movies.length, data: movies };
+        })
+      : {
+          success: true,
+          count: 0,
+          data: await Movie.find(query)
+            .select(MOVIE_LIST_SELECT)
+            .populate('organizer', 'name email companyName businessType')
+            .sort({ releaseDate: -1 })
+            .lean()
+        };
+
+    if (!cacheKey) {
+      payload.count = payload.data.length;
     }
 
-    const movies = await Movie.find(query)
-      .populate('organizer', 'name email companyName businessType')
-      .sort({ releaseDate: -1 });
-    res.status(200).json({ success: true, count: movies.length, data: movies });
+    res.status(200).json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -429,14 +484,28 @@ export const getMovies = async (req, res) => {
 
 export const getMovieById = async (req, res) => {
   try {
-    const movie = await Movie.findById(req.params.id).populate('organizer', 'name email');
-    if (!movie) return res.status(404).json({ success: false, message: 'Movie not found' });
-
-    if (movie.status !== 'Approved') {
+    if (!mongoose.isValidObjectId(req.params.id)) {
       return res.status(404).json({ success: false, message: 'Movie not found' });
     }
-    
-    res.status(200).json({ success: true, data: movie });
+
+    const payload = await withCache(`movies:detail:${req.params.id}`, MOVIE_DETAIL_CACHE_TTL_MS, async () => {
+      const movie = await Movie.findById(req.params.id)
+        .select(MOVIE_DETAIL_SELECT)
+        .populate('organizer', 'name email')
+        .lean();
+
+      if (!movie || movie.status !== 'Approved') {
+        return null;
+      }
+
+      return { success: true, data: movie };
+    });
+
+    if (!payload) {
+      return res.status(404).json({ success: false, message: 'Movie not found' });
+    }
+
+    res.status(200).json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -604,6 +673,8 @@ export const createShowtime = async (req, res) => {
       )
     );
 
+    invalidateMovieCache();
+
     res.status(201).json({ success: true, count: shows.length, data: shows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -660,6 +731,7 @@ export const updateShowtime = async (req, res) => {
       : normalizeShowSlotPricing(show.showSlotPricing);
 
     await show.save();
+    invalidateMovieCache();
 
     res.status(200).json({ success: true, data: show });
   } catch (error) {
@@ -839,6 +911,8 @@ export const updateShowWave = async (req, res) => {
       }))
     );
 
+    invalidateMovieCache();
+
     res.status(200).json({ success: true, count: recreatedShows.length, data: recreatedShows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -919,6 +993,7 @@ export const deleteShowWave = async (req, res) => {
     }
 
     const result = await Show.deleteMany(deleteFilter);
+    invalidateMovieCache();
 
     res.status(200).json({
       success: true,
@@ -935,83 +1010,98 @@ export const getMovieShowtimes = async (req, res) => {
     const { city, date } = req.query;
     const movieId = req.params.id;
     const targetDate = date || getTodayDateString();
+    const cacheKey = `movies:showtimes:${movieId}:${city || 'All Cities'}:${targetDate}`;
 
-    let multiplexQuery = {};
-    if (city && city !== 'All Cities') {
-      multiplexQuery = { city: new RegExp(`^${city}$`, 'i') };
-    }
+    const payload = await withCache(cacheKey, 10 * 1000, async () => {
+      const multiplexQuery =
+        city && city !== 'All Cities'
+          ? { city: new RegExp(`^${city}$`, 'i') }
+          : {};
 
-    const multiplexes = await Multiplex.find({
-      ...multiplexQuery,
-      ...getApprovedMultiplexQuery()
-    }).select('_id');
-    const multiplexIds = multiplexes.map((m) => m._id);
+      const multiplexes = await Multiplex.find({
+        ...multiplexQuery,
+        ...getApprovedMultiplexQuery()
+      })
+        .select('_id')
+        .lean();
 
-    let shows = await Show.find({
-      movie: movieId,
-      date: targetDate,
-      multiplex: { $in: multiplexIds }
-    })
-      .populate('multiplex', 'multiplexName address amenities')
-      .populate('screen', 'screenName screenType layout totalSeats rowCategories')
-      .lean();
-
-    const showIds = shows.map((s) => s._id);
-
-    const activeBookings = await Booking.find({
-      show: { $in: showIds },
-      $or: [
-        { status: 'Locked', expiresAt: { $gt: new Date() } },
-        { status: 'Confirmed' }
-      ]
-    }).select('show seats status');
-
-    const locksByShow = {};
-    const confirmedByShow = {};
-
-    for (const booking of activeBookings) {
-      const sid = String(booking.show);
-      if (booking.status === 'Locked') {
-        if (!locksByShow[sid]) locksByShow[sid] = [];
-        locksByShow[sid].push(...booking.seats);
-      } else {
-        if (!confirmedByShow[sid]) confirmedByShow[sid] = [];
-        confirmedByShow[sid].push(...booking.seats);
+      const multiplexIds = multiplexes.map((item) => item._id);
+      if (!multiplexIds.length) {
+        return { success: true, count: 0, data: [] };
       }
-    }
 
-    shows = shows.map((show) => {
-      const capacity = show.screen?.totalSeats || 100;
-      const lockedSeats = locksByShow[String(show._id)] || [];
-      const confirmedSeats = confirmedByShow[String(show._id)] || [];
+      let shows = await Show.find({
+        movie: movieId,
+        date: targetDate,
+        multiplex: { $in: multiplexIds }
+      })
+        .select(SHOW_LIST_SELECT)
+        .populate('multiplex', 'multiplexName address amenities')
+        .populate('screen', 'screenName screenType layout totalSeats rowCategories')
+        .sort({ startTime: 1 })
+        .lean();
 
-      const totalUnavailable = new Set([
-        ...(show.bookedSeats || []),
-        ...lockedSeats,
-        ...confirmedSeats
-      ]).size;
+      if (!shows.length) {
+        return { success: true, count: 0, data: [] };
+      }
 
-      const availableSeats = Math.max(0, capacity - totalUnavailable);
-      const fillRate = capacity > 0 ? totalUnavailable / capacity : 0;
+      const showIds = shows.map((item) => item._id);
+      const activeBookings = await Booking.find({
+        show: { $in: showIds },
+        $or: [
+          { status: 'Locked', expiresAt: { $gt: new Date() } },
+          { status: 'Confirmed' }
+        ]
+      })
+        .select('show seats status')
+        .lean();
 
-      const pricingPreview = buildSeatPricingPreview(show, {
-        rows: show.screen?.layout?.rows,
-        totalSeats: capacity
+      const locksByShow = {};
+      const confirmedByShow = {};
+
+      for (const booking of activeBookings) {
+        const showKey = String(booking.show);
+        if (booking.status === 'Locked') {
+          if (!locksByShow[showKey]) locksByShow[showKey] = [];
+          locksByShow[showKey].push(...(booking.seats || []));
+        } else {
+          if (!confirmedByShow[showKey]) confirmedByShow[showKey] = [];
+          confirmedByShow[showKey].push(...(booking.seats || []));
+        }
+      }
+
+      shows = shows.map((show) => {
+        const capacity = show.screen?.totalSeats || 100;
+        const lockedSeats = locksByShow[String(show._id)] || [];
+        const confirmedSeats = confirmedByShow[String(show._id)] || [];
+        const totalUnavailable = new Set([
+          ...(show.bookedSeats || []),
+          ...lockedSeats,
+          ...confirmedSeats
+        ]).size;
+        const availableSeats = Math.max(0, capacity - totalUnavailable);
+        const fillRate = capacity > 0 ? totalUnavailable / capacity : 0;
+        const pricingPreview = buildSeatPricingPreview(show, {
+          rows: show.screen?.layout?.rows,
+          totalSeats: capacity
+        });
+
+        return {
+          ...show,
+          basePrice: Object.values(pricingPreview.categoryPreview || {})[0] || show.basePrice,
+          pricingPreview,
+          isSurgeActive: pricingPreview.isSurgeActive,
+          availableSeats,
+          fillRate: Math.round(fillRate * 100),
+          isSoldOut: availableSeats === 0,
+          isFillingFast: fillRate >= 0.6 && availableSeats > 0
+        };
       });
 
-      return {
-        ...show,
-        basePrice: Object.values(pricingPreview.categoryPreview || {})[0] || show.basePrice,
-        pricingPreview,
-        isSurgeActive: pricingPreview.isSurgeActive,
-        availableSeats,
-        fillRate: Math.round(fillRate * 100),
-        isSoldOut: availableSeats === 0,
-        isFillingFast: fillRate >= 0.6 && availableSeats > 0,
-      };
+      return { success: true, count: shows.length, data: shows };
     });
 
-    res.status(200).json({ success: true, count: shows.length, data: shows });
+    res.status(200).json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1019,7 +1109,12 @@ export const getMovieShowtimes = async (req, res) => {
 
 export const getShowById = async (req, res) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.showId)) {
+      return res.status(404).json({ success: false, message: 'Show not found' });
+    }
+
     const show = await Show.findById(req.params.showId)
+      .select(SHOW_LIST_SELECT)
       .populate('movie', 'title poster organizer')
       .populate('multiplex', 'multiplexName address city status')
       .populate('screen', 'screenName screenType layout totalSeats rowCategories')

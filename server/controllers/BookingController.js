@@ -13,6 +13,7 @@ import {
   normalizeSeatCategoryPricing,
   normalizeShowSlotPricing
 } from '../utils/showPricing.js';
+import { clearCacheByPrefix } from '../utils/memoryCache.js';
 
 const LOCK_DURATION_MS = 5 * 60 * 1000;
 
@@ -146,6 +147,21 @@ const getBookingPopulates = () => ([
   { path: 'screen', select: 'screenName screenType totalSeats layout rowCategories' },
   { path: 'user', select: 'name email' }
 ]);
+
+const invalidateAvailabilityCache = ({ eventId, movieId, showId } = {}) => {
+  if (eventId) {
+    clearCacheByPrefix('events:list:');
+    clearCacheByPrefix(`events:detail:${eventId}`);
+    clearCacheByPrefix('events:search:');
+    clearCacheByPrefix('events:recommended:');
+  }
+
+  if (movieId || showId) {
+    clearCacheByPrefix('movies:list:');
+    clearCacheByPrefix(`movies:detail:${movieId || ''}`);
+    clearCacheByPrefix('movies:showtimes:');
+  }
+};
 
 // ─────────────────────────────────────────────────────────
 // EXPORTED CONTROLLERS
@@ -297,6 +313,11 @@ export const createBooking = async (req, res) => {
     }
 
     await session.commitTransaction();
+    invalidateAvailabilityCache({
+      eventId,
+      movieId: bookingPayload.movie,
+      showId: bookingPayload.show
+    });
 
     const populatedBooking = await Booking.findById(booking._id).populate(getBookingPopulates());
     res.status(201).json({ success: true, data: populatedBooking });
@@ -375,6 +396,8 @@ export const lockSeats = async (req, res) => {
       totalAmount: req.body.totalAmount || 0,
       expiresAt: lockExpiry
     });
+
+    invalidateAvailabilityCache({ eventId, showId });
 
     res.status(200).json({
       success: true,

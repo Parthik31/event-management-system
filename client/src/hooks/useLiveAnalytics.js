@@ -8,9 +8,13 @@ export const useLiveAnalytics = (endpoint, refreshInterval = 30000) => {
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const isMountedRef = useRef(true);
+  const isFetchingRef = useRef(false);
 
   const fetchData = useCallback(
     async (isBackground = false) => {
+      if (isFetchingRef.current) return;
+
+      isFetchingRef.current = true;
       if (!isBackground) setLoading(true);
       try {
         const response = await api.get(endpoint);
@@ -25,6 +29,7 @@ export const useLiveAnalytics = (endpoint, refreshInterval = 30000) => {
           if (!isBackground) toast.error('Failed to sync live data.');
         }
       } finally {
+        isFetchingRef.current = false;
         if (isMountedRef.current) setLoading(false);
       }
     },

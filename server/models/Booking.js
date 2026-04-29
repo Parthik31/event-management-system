@@ -151,6 +151,8 @@ bookingSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 bookingSchema.index({ user: 1, createdAt: -1 });
 bookingSchema.index({ event: 1, status: 1, expiresAt: 1 });
 bookingSchema.index({ show: 1, status: 1, expiresAt: 1 });
+bookingSchema.index({ event: 1, status: 1, expiresAt: 1, seats: 1 });
+bookingSchema.index({ show: 1, status: 1, expiresAt: 1, seats: 1 });
 bookingSchema.index({ movie: 1, status: 1, createdAt: -1 });
 bookingSchema.index({ multiplex: 1, status: 1, createdAt: -1 });
 

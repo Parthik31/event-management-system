@@ -4,7 +4,7 @@ import {
   Calendar, MapPin, Clock, User, Ticket, 
   ArrowLeft, Loader2, Info, Receipt, Minus, Plus, X, CheckCircle, Tag, Heart, Share2, BellRing, Star, Sparkles
 } from 'lucide-react';
-import api, { resolveMediaUrl } from '../../utils/Axios';
+import api, { getCachedApi, resolveMediaUrl } from '../../utils/Axios';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from 'react-hot-toast';
 import ReviewSection from '../../components/ReviewSection';
@@ -31,39 +31,59 @@ const EventDetails = () => {
   const [availableCoupons, setAvailableCoupons] = useState([]);
 
   useEffect(() => {
+    let isActive = true;
+
     const fetchEventData = async () => {
       try {
         // 1. Fetch Main Event Details (Must succeed)
-        const res = await api.get(`/events/${id}`);
-        const fetchedEvent = res.data.data;
+        const res = await getCachedApi(`/events/${id}`, {}, { cacheTTL: 60000 });
+        const fetchedEvent = res.data?.data;
+        if (!isActive) return;
         setEvent(fetchedEvent);
 
         // 🚀 PHASE 1: Fetch "Users who booked this also liked..."
-        try {
-          const similarRes = await api.get(`/events/search?category=${fetchedEvent.category}`);
-          // Filter out the current event and grab the top 3 recommendations
-          setSimilarEvents(similarRes.data.data.filter(e => e._id !== fetchedEvent._id).slice(0, 3));
-        } catch (simError) {
-          console.error("Failed to load recommendations", simError);
+        const [similarResult, couponResult] = await Promise.allSettled([
+          getCachedApi(
+            `/events/search?category=${encodeURIComponent(fetchedEvent?.category || '')}`,
+            {},
+            { cacheTTL: 30000 }
+          ),
+          getCachedApi(`/coupons/event/${id}`, {}, { cacheTTL: 30000, preferCacheOnError: false })
+        ]);
+
+        if (!isActive) return;
+
+        if (similarResult.status === 'fulfilled') {
+          const similarData = similarResult.value.data?.data || [];
+          setSimilarEvents(similarData.filter((item) => item?._id !== fetchedEvent?._id).slice(0, 3));
+        } else {
+          console.error('Failed to load recommendations', similarResult.reason);
+          setSimilarEvents([]);
         }
 
-        // 2. Fetch Promo Codes (Safe fail - if this breaks, the event still loads)
-        try {
-          const couponRes = await api.get(`/coupons/event/${id}`);
-          setAvailableCoupons(couponRes.data?.data || []);
-        } catch (couponErr) {
-          console.error("No coupons found or coupon API failed", couponErr);
+        if (couponResult.status === 'fulfilled') {
+          setAvailableCoupons(couponResult.value.data?.data || []);
+        } else {
+          console.error('No coupons found or coupon API failed', couponResult.reason);
           setAvailableCoupons([]);
         }
 
       } catch {
-        toast.error('Failed to load event details');
+        if (isActive) {
+          toast.error('Failed to load event details');
+        }
       } finally {
-        setLoading(false);
+        if (isActive) {
+          setLoading(false);
+        }
       }
     };
     
     fetchEventData();
+
+    return () => {
+      isActive = false;
+    };
   }, [id]);
 
   // Prevent background scrolling when checkout modal is open

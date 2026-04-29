@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Ticket, Calendar, MapPin, Loader2, Sparkles, TrendingUp, Film } from 'lucide-react';
-import api from '../../utils/Axios'; 
+import { getCachedApi } from '../../utils/Axios'; 
 import { useAuth } from '../../context/AuthContext';
 
 const HERO_SLIDES = [
@@ -32,82 +32,92 @@ const Home = () => {
   const [isMovieFallbackActive, setIsMovieFallbackActive] = useState(false);
 
   useEffect(() => {
+    let isActive = true;
+
     const fetchHomeData = async () => {
       try {
-        setLoading(true);
-        
-        // 1. Fetch AI Recommendations (Backend automatically handles Guest vs Logged In)
-        try {
-          const recRes = await api.get('/events/recommended');
-          if (recRes.data.success) {
-            setRecommendedEvents(recRes.data.data);
-          }
-        } catch (recError) {
-          console.error("Failed to fetch recommendations", recError);
-        }
-
-        // 2. Fetch Trending Movies
-        try {
+        if (isActive) {
+          setLoading(true);
           setIsMovieFallbackActive(false);
-          const movieEndpoint = (userCity && userCity !== 'All Cities') 
-            ? `/movies?status=Approved&city=${encodeURIComponent(userCity)}` 
-            : '/movies?status=Approved';
-            
-          const moviesRes = await api.get(movieEndpoint);
-          let fetchedMovies = moviesRes.data?.data || [];
-          
-          // Fallback LOGIC: If no movies in city, fetch global movies instead
-          if (fetchedMovies.length === 0 && userCity && userCity !== 'All Cities') {
-            setIsMovieFallbackActive(true);
-            const fallbackRes = await api.get('/movies?status=Approved');
+          setIsEventFallbackActive(false);
+        }
+
+        const movieEndpoint = (userCity && userCity !== 'All Cities') 
+          ? `/movies?status=Approved&city=${encodeURIComponent(userCity)}` 
+          : '/movies?status=Approved';
+        const eventEndpoint = (userCity && userCity !== 'All Cities') 
+          ? `/events/search?q=${encodeURIComponent(userCity)}` 
+          : '/events?status=Approved';
+
+        const [recResult, moviesResult, eventsResult] = await Promise.allSettled([
+          getCachedApi('/events/recommended', {}, { cacheTTL: 30000 }),
+          getCachedApi(movieEndpoint, {}, { cacheTTL: 30000 }),
+          getCachedApi(eventEndpoint, {}, { cacheTTL: 30000 })
+        ]);
+
+        if (!isActive) return;
+
+        if (recResult.status === 'fulfilled' && recResult.value.data.success) {
+          setRecommendedEvents(recResult.value.data.data || []);
+        } else {
+          setRecommendedEvents([]);
+          if (recResult.status === 'rejected') {
+            console.error('Failed to fetch recommendations', recResult.reason);
+          }
+        }
+
+        let fetchedMovies =
+          moviesResult.status === 'fulfilled' ? moviesResult.value.data?.data || [] : [];
+
+        if (!fetchedMovies.length && userCity && userCity !== 'All Cities') {
+          try {
+            const fallbackRes = await getCachedApi('/movies?status=Approved', {}, { cacheTTL: 30000 });
             fetchedMovies = fallbackRes.data?.data || [];
+            if (isActive) {
+              setIsMovieFallbackActive(true);
+            }
+          } catch (movieFallbackError) {
+            console.error('Failed to fetch fallback movies', movieFallbackError);
           }
-
-          if (fetchedMovies.length > 0) {
-            setTrendingMovies(fetchedMovies.slice(0, 8)); // Grab top 8
-          } else {
-            setTrendingMovies([]);
-          }
-        } catch (movieError) {
-          console.error("Failed to fetch trending movies", movieError);
         }
 
-        // 3. Fetch General Trending Events (Strictly Filtered by User's City)
-        try {
-          setIsEventFallbackActive(false); 
-          const endpoint = (userCity && userCity !== 'All Cities') 
-            ? `/events/search?q=${encodeURIComponent(userCity)}` 
-            : '/events?status=Approved';
-            
-          const trendingRes = await api.get(endpoint);
-          let fetchedEvents = trendingRes.data?.data || [];
-          
-          // Fallback LOGIC: If no events in city, fetch global events instead
-          if (fetchedEvents.length === 0 && userCity && userCity !== 'All Cities') {
-            setIsEventFallbackActive(true);
-            const fallbackRes = await api.get('/events?status=Approved');
+        if (isActive) {
+          setTrendingMovies(fetchedMovies.slice(0, 8));
+        }
+
+        let fetchedEvents =
+          eventsResult.status === 'fulfilled' ? eventsResult.value.data?.data || [] : [];
+
+        if (!fetchedEvents.length && userCity && userCity !== 'All Cities') {
+          try {
+            const fallbackRes = await getCachedApi('/events?status=Approved', {}, { cacheTTL: 30000 });
             fetchedEvents = fallbackRes.data?.data || [];
+            if (isActive) {
+              setIsEventFallbackActive(true);
+            }
+          } catch (eventFallbackError) {
+            console.error('Failed to fetch fallback events', eventFallbackError);
           }
-
-          if (fetchedEvents.length > 0) {
-            // Sort by ticketsSold to get true "Trending" (Fallback if no tickets sold yet)
-            const sortedTrending = fetchedEvents.sort((a, b) => (b.ticketsSold || 0) - (a.ticketsSold || 0));
-            setTrendingEvents(sortedTrending.slice(0, 8)); // Grab top 8
-          } else {
-            setTrendingEvents([]); 
-          }
-        } catch (trendError) {
-          console.error("Failed to fetch trending events", trendError);
         }
 
+        if (isActive) {
+          const sortedTrending = [...fetchedEvents].sort((a, b) => (b?.ticketsSold || 0) - (a?.ticketsSold || 0));
+          setTrendingEvents(sortedTrending.slice(0, 8));
+        }
       } catch (error) {
         console.error("Failed to fetch home data", error);
       } finally {
-        setLoading(false);
+        if (isActive) {
+          setLoading(false);
+        }
       }
     };
 
     fetchHomeData();
+
+    return () => {
+      isActive = false;
+    };
   }, [userCity]); // Re-run whenever the user changes their city in the Navbar
 
   if (loading) {

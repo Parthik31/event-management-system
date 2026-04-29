@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { Search, Calendar, MapPin, Filter, X, SlidersHorizontal } from 'lucide-react';
-import api from '../../utils/Axios';
+import { getCachedApi } from '../../utils/Axios';
 import { buildEventSearchParams } from '../../utils/search';
 
 const SearchEvents = () => {
@@ -17,24 +17,38 @@ const SearchEvents = () => {
   const [category, setCategory] = useState('All');
   const [priceFilter, setPriceFilter] = useState('All'); 
   const [dateFilter, setDateFilter] = useState('');
+  const latestRequestRef = useRef('');
 
   useEffect(() => {
+    let isActive = true;
+
     const fetchSearchResults = async () => {
-      setLoading(true);
+      const queryString = buildEventSearchParams({
+        query,
+        category,
+        priceFilter,
+        dateFilter
+      });
+
+      if (isActive) {
+        setLoading(true);
+        latestRequestRef.current = queryString;
+      }
+
       try {
-        const queryString = buildEventSearchParams({
-          query,
-          category,
-          priceFilter,
-          dateFilter
-        });
-        const { data } = await api.get(`/events/search?${queryString}`);
-        setEvents(data.data);
+        const { data } = await getCachedApi(`/events/search?${queryString}`, {}, { cacheTTL: 30000 });
+        if (isActive && latestRequestRef.current === queryString) {
+          setEvents(data.data || []);
+        }
       } catch (error) {
         console.error(error);
-        setEvents([]);
+        if (isActive && latestRequestRef.current === queryString) {
+          setEvents([]);
+        }
       } finally {
-        setLoading(false);
+        if (isActive && latestRequestRef.current === queryString) {
+          setLoading(false);
+        }
       }
     };
 
@@ -46,7 +60,11 @@ const SearchEvents = () => {
       else setSearchParams({});
     }, 400);
 
-    return () => clearTimeout(delayDebounceFn);
+    return () => {
+      isActive = false;
+      clearTimeout(delayDebounceFn);
+    };
+
   }, [query, category, priceFilter, dateFilter, setSearchParams]);
 
   const clearFilters = () => {

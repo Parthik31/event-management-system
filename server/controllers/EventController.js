@@ -4,6 +4,23 @@ import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import SavedEvent from '../models/SavedEvent.js';
 import { getTodayDateString } from '../utils/date.js';
+import { clearCacheByPrefix, withCache } from '../utils/memoryCache.js';
+
+const EVENT_LIST_SELECT =
+  'title description date time location price category duration image banner trailerUrl language ageLimit organizer status ticketCategories ticketsSold bookedSeats createdAt';
+const EVENT_DETAIL_SELECT =
+  'title description date time location price category duration image banner trailerUrl language ageLimit terms organizer status ticketCategories bookedSeats ticketsSold createdAt updatedAt';
+const EVENT_CARD_SELECT =
+  'title date time location price category image banner language ageLimit ticketsSold organizer';
+const EVENT_PUBLIC_CACHE_TTL_MS = 30 * 1000;
+const EVENT_DETAIL_CACHE_TTL_MS = 60 * 1000;
+
+const invalidateEventCache = () => {
+  clearCacheByPrefix('events:list:');
+  clearCacheByPrefix('events:detail:');
+  clearCacheByPrefix('events:search:');
+  clearCacheByPrefix('events:recommended:');
+};
 
 const enrichEventsWithLiveStats = async (events = []) => {
   if (!events.length) {
@@ -131,6 +148,7 @@ export const createEvent = async (req, res) => {
     
     // Mongoose schema handles missing required fields, firing a validation error caught below
     const event = await Event.create(req.body); 
+    invalidateEventCache();
     
     res.status(201).json({ success: true, data: event }); 
   } catch (error) { 
@@ -147,28 +165,68 @@ export const getEvents = async (req, res) => {
     let query = { status: isAdminRequest ? requestedStatus : 'Approved' }; 
     
     if (category && category !== 'All') query.category = category; 
-    
-    const events = await Event.find(query).populate('organizer', 'name email companyName businessType').sort({ date: 1 }); 
-    
-    res.status(200).json({ success: true, count: events.length, data: events }); 
+
+    const cacheKey = !isAdminRequest
+      ? `events:list:${requestedStatus}:${category || 'All'}`
+      : null;
+
+    const payload = cacheKey
+      ? await withCache(cacheKey, EVENT_PUBLIC_CACHE_TTL_MS, async () => {
+          const events = await Event.find(query)
+            .select(EVENT_LIST_SELECT)
+            .populate('organizer', 'name email companyName businessType')
+            .sort({ date: 1, time: 1 })
+            .lean();
+
+          return { success: true, count: events.length, data: events };
+        })
+      : {
+          success: true,
+          count: 0,
+          data: await Event.find(query)
+            .select(EVENT_LIST_SELECT)
+            .populate('organizer', 'name email companyName businessType')
+            .sort({ date: 1, time: 1 })
+            .lean()
+        };
+
+    if (!cacheKey) {
+      payload.count = payload.data.length;
+    }
+
+    res.status(200).json(payload); 
   } catch (error) { 
-    res.status(500).json({ success: false, message: 'Server Error' }); 
+    res.status(500).json({ success: false, message: error.message || 'Server Error' }); 
   }
 };
 
 // @desc    Get Single Event
 export const getEvent = async (req, res) => {
   try { 
-    const event = await Event.findById(req.params.id).populate('organizer', 'name email'); 
-    if (!event) return res.status(404).json({ success: false, message: 'Event not found' }); 
-
-    if (event.status !== 'Approved') {
+    if (!mongoose.isValidObjectId(req.params.id)) {
       return res.status(404).json({ success: false, message: 'Event not found' });
     }
-    
-    res.status(200).json({ success: true, data: event }); 
+
+    const payload = await withCache(`events:detail:${req.params.id}`, EVENT_DETAIL_CACHE_TTL_MS, async () => {
+      const event = await Event.findById(req.params.id)
+        .select(EVENT_DETAIL_SELECT)
+        .populate('organizer', 'name email')
+        .lean();
+
+      if (!event || event.status !== 'Approved') {
+        return null;
+      }
+
+      return { success: true, data: event };
+    });
+
+    if (!payload) {
+      return res.status(404).json({ success: false, message: 'Event not found' });
+    }
+
+    res.status(200).json(payload); 
   } catch (error) { 
-    res.status(500).json({ success: false, message: 'Server Error' }); 
+    res.status(500).json({ success: false, message: error.message || 'Server Error' }); 
   }
 };
 
@@ -223,6 +281,7 @@ export const updateEvent = async (req, res) => {
     }
     
     event = await Event.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after', runValidators: true }); 
+    invalidateEventCache();
     res.status(200).json({ success: true, data: event, message: 'Event updated successfully' }); 
   } catch (error) { 
     res.status(500).json({ success: false, message: error.message }); 
@@ -239,6 +298,7 @@ export const updateEventStatus = async (req, res) => {
     if (adminFeedback !== undefined) updates.adminFeedback = adminFeedback; 
     
     const event = await Event.findByIdAndUpdate(req.params.id, updates, { returnDocument: 'after' }); 
+    invalidateEventCache();
     res.status(200).json({ success: true, data: event }); 
   } catch (error) { 
     res.status(500).json({ success: false, message: error.message }); 
@@ -282,11 +342,30 @@ export const searchEvents = async (req, res) => {
     }
     
     // Execute query (Sort by relevance if searching, otherwise sort by date)
-    const events = q 
-      ? await Event.find(query, { score: { $meta: "textScore" } }).sort({ score: { $meta: "textScore" } })
-      : await Event.find(query).sort({ date: 1 });
-      
-    res.status(200).json({ success: true, count: events.length, data: events }); 
+    const cacheKey = `events:search:${JSON.stringify({
+      q: q || '',
+      category: category || '',
+      minPrice: minPrice || '',
+      maxPrice: maxPrice || '',
+      startDate: startDate || '',
+      endDate: endDate || ''
+    })}`;
+
+    const payload = await withCache(cacheKey, EVENT_PUBLIC_CACHE_TTL_MS, async () => {
+      const baseQuery = q
+        ? Event.find(query, { score: { $meta: 'textScore' } })
+        : Event.find(query);
+
+      const events = await baseQuery
+        .select(q ? `${EVENT_CARD_SELECT} score` : EVENT_CARD_SELECT)
+        .populate('organizer', 'name email')
+        .sort(q ? { score: { $meta: 'textScore' }, date: 1, time: 1 } : { date: 1, time: 1 })
+        .lean();
+
+      return { success: true, count: events.length, data: events };
+    });
+
+    res.status(200).json(payload); 
   } catch (error) { 
     res.status(500).json({ success: false, message: error.message }); 
   }
@@ -298,7 +377,6 @@ export const searchEvents = async (req, res) => {
 export const getRecommendedEvents = async (req, res) => {
   try {
     const todayStr = getTodayDateString();
-    let recommended = [];
     let userId = null;
 
     // 1. Silently check if the user is logged in (Optional Auth)
@@ -315,41 +393,76 @@ export const getRecommendedEvents = async (req, res) => {
       } catch (err) { /* Ignore */ }
     }
 
-    // 2. AI Collaborative Filtering (If Logged In)
-    if (userId) {
-      const userObjId = new mongoose.Types.ObjectId(userId);
-      const bookings = await Booking.find({ user: userObjId }).populate('event');
-      const saved = await SavedEvent.find({ user: userObjId }).populate('event');
+    const cacheKey = `events:recommended:${userId || 'guest'}`;
 
-      // Extract user's favorite categories
-      const favoriteCategories = new Set();
-      bookings.forEach(b => b.event && favoriteCategories.add(b.event.category));
-      saved.forEach(s => s.event && favoriteCategories.add(s.event.category));
+    const payload = await withCache(cacheKey, EVENT_PUBLIC_CACHE_TTL_MS, async () => {
+      let recommended = [];
 
-      if (favoriteCategories.size > 0) {
-        // Find upcoming events in these categories that the user HASN'T booked yet
-        const bookedEventIds = bookings.map(b => b.event?._id);
-        
+      if (userId && mongoose.isValidObjectId(userId)) {
+        const userObjId = new mongoose.Types.ObjectId(userId);
+        const [bookings, saved] = await Promise.all([
+          Booking.find({
+            user: userObjId,
+            itemType: 'Event',
+            event: { $ne: null },
+            status: 'Confirmed'
+          })
+            .select('event')
+            .populate('event', 'category')
+            .lean(),
+          SavedEvent.find({ user: userObjId })
+            .select('event')
+            .populate('event', 'category')
+            .lean()
+        ]);
+
+        const favoriteCategories = new Set();
+        const bookedEventIds = [];
+
+        bookings.forEach((booking) => {
+          if (booking.event?._id) {
+            bookedEventIds.push(booking.event._id);
+          }
+          if (booking.event?.category) {
+            favoriteCategories.add(booking.event.category);
+          }
+        });
+
+        saved.forEach((entry) => {
+          if (entry.event?.category) {
+            favoriteCategories.add(entry.event.category);
+          }
+        });
+
+        if (favoriteCategories.size > 0) {
+          recommended = await Event.find({
+            status: 'Approved',
+            date: { $gte: todayStr },
+            category: { $in: Array.from(favoriteCategories) },
+            _id: { $nin: bookedEventIds }
+          })
+            .select(EVENT_CARD_SELECT)
+            .sort({ ticketsSold: -1, date: 1 })
+            .limit(6)
+            .lean();
+        }
+      }
+
+      if (recommended.length === 0) {
         recommended = await Event.find({
           status: 'Approved',
-          date: { $gte: todayStr },
-          category: { $in: Array.from(favoriteCategories) },
-          _id: { $nin: bookedEventIds } 
-        }).limit(6);
+          date: { $gte: todayStr }
+        })
+          .select(EVENT_CARD_SELECT)
+          .sort({ ticketsSold: -1, date: 1 })
+          .limit(6)
+          .lean();
       }
-    }
 
-    // 3. Fallback: Trending Events (If Guest OR no history found)
-    if (recommended.length === 0) {
-      recommended = await Event.find({
-        status: 'Approved',
-        date: { $gte: todayStr }
-      })
-      .sort({ ticketsSold: -1 }) // Sort by highest tickets sold
-      .limit(6);
-    }
+      return { success: true, count: recommended.length, data: recommended };
+    });
 
-    res.status(200).json({ success: true, count: recommended.length, data: recommended });
+    res.status(200).json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

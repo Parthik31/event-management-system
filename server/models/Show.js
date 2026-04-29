@@ -31,6 +31,8 @@ const showSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 showSchema.index({ movie: 1, date: 1, multiplex: 1, startTime: 1 });
+showSchema.index({ movie: 1, date: 1 });
 showSchema.index({ multiplex: 1, date: 1, startTime: 1 });
+showSchema.index({ waveGroupId: 1 });
 
 export default mongoose.model('Show', showSchema);

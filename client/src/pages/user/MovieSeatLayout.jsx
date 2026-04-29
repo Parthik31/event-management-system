@@ -281,6 +281,8 @@ const MovieSeatLayout = () => {
   const [isLocking, setIsLocking] = useState(false);
   const [isBooking, setIsBooking] = useState(false);
   const [lockExpiresAt, setLockExpiresAt] = useState(null);
+  const isSyncingRef = useRef(false);
+  const loadedShowIdRef = useRef('');
 
   // Clear our local lock state when the timer runs out
   useEffect(() => {
@@ -296,24 +298,42 @@ const MovieSeatLayout = () => {
 
   // ── INITIAL DATA FETCH ──
   useEffect(() => {
+    let isActive = true;
+
     const fetch = async () => {
       try {
+        if (loadedShowIdRef.current === showId) return;
         const { data } = await api.get(`/movies/shows/${showId}`);
-        if (data.success) setShow(data.data);
+        if (data.success && isActive) {
+          loadedShowIdRef.current = showId;
+          setShow(data.data);
+        }
       } catch {
-        toast.error('Failed to load seating arrangement.');
-        navigate(-1);
+        loadedShowIdRef.current = '';
+        if (isActive) {
+          toast.error('Failed to load seating arrangement.');
+          navigate(-1);
+        }
       } finally {
-        setLoading(false);
+        if (isActive) {
+          setLoading(false);
+        }
       }
     };
     fetch();
+
+    return () => {
+      isActive = false;
+    };
   }, [showId, navigate]);
 
   // ── REAL-TIME SEAT SYNC & AUTO-EVICTION ──
   const pollRef = useRef(null);
   const syncSeats = useCallback(async () => {
-    if (document.visibilityState !== 'visible') return;
+    if (document.visibilityState !== 'visible' || isSyncingRef.current) return;
+
+    isSyncingRef.current = true;
+
     try {
       const { data } = await api.get(`/movies/shows/${showId}`);
       if (!data.success || !data.data) return;
@@ -333,6 +353,9 @@ const MovieSeatLayout = () => {
         return prev;
       });
     } catch {/* silent */}
+    finally {
+      isSyncingRef.current = false;
+    }
   }, [showId, myLockedSeats]);
 
   useEffect(() => {
@@ -363,7 +386,7 @@ const MovieSeatLayout = () => {
         seats: selectedSeats,
       });
       if (data.success) {
-        setLockExpiresAt(Date.now() + LOCK_DURATION_SECONDS * 1000);
+        setLockExpiresAt(data.expiresAt ? new Date(data.expiresAt).getTime() : Date.now() + LOCK_DURATION_SECONDS * 1000);
         setMyLockedSeats(selectedSeats); // Mark seats as owned by us
         setStep(1);
         setShowModal(true);

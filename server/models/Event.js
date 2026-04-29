@@ -69,6 +69,6 @@ eventSchema.set('toObject', { virtuals: true });
 eventSchema.index({ title: 'text', description: 'text', category: 'text', location: 'text' });
 eventSchema.index({ status: 1, date: 1, category: 1 });
 eventSchema.index({ organizer: 1, createdAt: -1 });
+eventSchema.index({ status: 1, date: 1, ticketsSold: -1 });
 
 export default mongoose.model('Event', eventSchema);
-

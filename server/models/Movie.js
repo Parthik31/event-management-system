@@ -24,4 +24,8 @@ const movieSchema = new mongoose.Schema({
   status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
 }, { timestamps: true });
 
+movieSchema.index({ status: 1, isUpcoming: 1, releaseDate: -1 });
+movieSchema.index({ organizer: 1, createdAt: -1 });
+movieSchema.index({ genre: 1, status: 1, releaseDate: -1 });
+
 export default mongoose.model('Movie', movieSchema);
