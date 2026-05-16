@@ -13,6 +13,15 @@ const ScanTicket = () => {
   useEffect(() => {
     // Force dark mode context for the scanner to ensure the background blends well
     document.documentElement.classList.add('dark');
+
+    // 🚀 SMART HOTSPOT FIX: Ensure the scanner can reach the backend 
+    // when testing from a mobile device on a local network.
+    if (window.location.hostname.match(/^(192\.168\.|172\.|10\.)/)) {
+      const currentBase = api.defaults.baseURL || 'http://localhost:5000/api';
+      if (currentBase.includes('localhost') || currentBase.includes('127.0.0.1')) {
+        api.defaults.baseURL = currentBase.replace(/localhost|127\.0\.0\.1/, window.location.hostname);
+      }
+    }
     
     const scanner = new Html5QrcodeScanner('reader', {
       qrbox: { width: 250, height: 250 },
@@ -25,7 +34,7 @@ const ScanTicket = () => {
       // Pause scanner while validating with backend
       scanner.pause(true);
 
-      // CRITICAL FIX: Bulletproof URL extraction preventing trailing slashes or hashes from breaking DB queries
+      // Bulletproof URL extraction preventing trailing slashes or hashes from breaking DB queries
       let resolvedTicketId = decodedText.trim();
       if (resolvedTicketId.includes('/verify/')) {
         resolvedTicketId = resolvedTicketId.split('/verify/')[1].split(/[\/\?#]/)[0].trim();
@@ -35,7 +44,7 @@ const ScanTicket = () => {
     }
 
     function errorCallback() {
-      // Ignore routine scan errors (when it doesn't see a QR code)
+      // Ignore routine scan errors (when it doesn't see a QR code yet)
     }
 
     // Cleanup on unmount
@@ -62,7 +71,7 @@ const ScanTicket = () => {
         message: err.response?.data?.message || 'Invalid Ticket or Server Error',
         details: err.response?.data?.checkInTime 
           ? `Already checked in at ${new Date(err.response.data.checkInTime).toLocaleTimeString()}`
-          : 'Please check with the box office.'
+          : (err.message === 'Network Error' ? 'Cannot reach backend. Make sure your PC firewall allows local network connections.' : 'Please check with the box office.')
       });
     } finally {
       setLoading(false);

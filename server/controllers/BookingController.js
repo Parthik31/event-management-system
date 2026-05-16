@@ -72,7 +72,6 @@ const buildActiveLockQuery = ({ eventId, showId, seats = [], excludeUserId } = {
   if (eventId) query.event = eventId;
   if (showId) query.show = showId;
   if (Array.isArray(seats) && seats.length) query.seats = { $in: seats };
-  // Convert string ID to ObjectId to prevent matching the user's own locks!
   if (excludeUserId) query.user = { $ne: new mongoose.Types.ObjectId(excludeUserId) };
   return query;
 };
@@ -110,7 +109,6 @@ const reserveEventInventory = async (eventId, seats = [], quantity = 0, session)
   }
   if (totalCapacity > 0) {
     const maxSold = Math.max(totalCapacity - quantity, -1);
-    // Match documents where ticketsSold doesn't exist yet as well
     reservationQuery.$or = [
       { ticketsSold: { $lte: maxSold } },
       { ticketsSold: { $exists: false } }
@@ -155,7 +153,6 @@ const invalidateAvailabilityCache = ({ eventId, movieId, showId } = {}) => {
     clearCacheByPrefix('events:search:');
     clearCacheByPrefix('events:recommended:');
   }
-
   if (movieId || showId) {
     clearCacheByPrefix('movies:list:');
     clearCacheByPrefix(`movies:detail:${movieId || ''}`);
@@ -172,17 +169,9 @@ export const createBooking = async (req, res) => {
   session.startTransaction();
 
   try {
-    const {
-      itemType = 'Event',
-      eventId,
-      showId,
-      quantity,
-      categoryName,
-      seats = [],
-      promoCode
-    } = req.body;
-
+    const { itemType = 'Event', eventId, showId, quantity, categoryName, seats = [], promoCode } = req.body;
     const qty = Number(quantity);
+
     if (!qty || qty < 1) {
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: 'Quantity must be at least 1.' });
@@ -212,6 +201,7 @@ export const createBooking = async (req, res) => {
       const lockedSeats = await Booking.findOne(
         buildActiveLockQuery({ showId, seats, excludeUserId: req.user.id })
       ).select('_id').session(session);
+      
       if (lockedSeats) {
         await session.abortTransaction();
         return res.status(409).json({ success: false, message: 'One or more seats were already booked. Please refresh and try again.' });
@@ -303,8 +293,6 @@ export const createBooking = async (req, res) => {
 
     const charges = calculateCharges(ticketPrice, qty, discountedSubtotal);
 
-    // Generate one unique QR-able subTicketId per person/ticket slot.
-    // This powers the individual-QR display and per-person entry scanning.
     const individualTickets = Array.from({ length: qty }, () => ({
       subTicketId: buildTicketId(),
       isCheckedIn: false,
@@ -323,18 +311,13 @@ export const createBooking = async (req, res) => {
     }
 
     await session.commitTransaction();
-    invalidateAvailabilityCache({
-      eventId,
-      movieId: bookingPayload.movie,
-      showId: bookingPayload.show
-    });
+    invalidateAvailabilityCache({ eventId, movieId: bookingPayload.movie, showId: bookingPayload.show });
 
     const populatedBooking = await Booking.findById(booking._id).populate(getBookingPopulates());
     res.status(201).json({ success: true, data: populatedBooking });
 
   } catch (error) {
     await session.abortTransaction();
-    console.error('createBooking error:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     session.endSession();
@@ -369,16 +352,12 @@ export const lockSeats = async (req, res) => {
     const conflictQuery = {
       status: { $in: ['Locked', 'Confirmed'] },
       seats: { $in: seats },
-      // Convert string ID to ObjectId to prevent matching the user's own locks!
       user: { $ne: new mongoose.Types.ObjectId(userId) },
       expiresAt: { $gt: new Date() }
     };
 
-    if (itemType === 'Movie') {
-      conflictQuery.show = showId;
-    } else {
-      conflictQuery.event = eventId;
-    }
+    if (itemType === 'Movie') conflictQuery.show = showId;
+    else conflictQuery.event = eventId;
 
     const activeConflicts = await Booking.countDocuments(conflictQuery);
     if (activeConflicts > 0) {
@@ -386,11 +365,9 @@ export const lockSeats = async (req, res) => {
     }
 
     const userLockQuery = { user: userId, status: 'Locked' };
-    if (itemType === 'Movie') {
-      userLockQuery.show = showId;
-    } else {
-      userLockQuery.event = eventId;
-    }
+    if (itemType === 'Movie') userLockQuery.show = showId;
+    else userLockQuery.event = eventId;
+    
     await Booking.deleteMany(userLockQuery);
 
     const lockExpiry = new Date(Date.now() + LOCK_DURATION_MS);
@@ -415,9 +392,7 @@ export const lockSeats = async (req, res) => {
       lockId: lockedBooking._id,
       expiresAt: lockExpiry
     });
-
   } catch (error) {
-    console.error('lockSeats error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -446,7 +421,6 @@ export const getMyBookings = async (req, res) => {
 
     res.status(200).json({ success: true, count: safeBookings.length, data: safeBookings });
   } catch (error) {
-    console.error('Fetch Bookings Error:', error);
     res.status(500).json({ success: false, message: 'Failed to load bookings. Please try again.' });
   }
 };
@@ -455,24 +429,26 @@ export const verifyBookingPublic = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Try main ticketId first (legacy + single-ticket flow)
-    let booking = await Booking.findOne({ ticketId: id }).populate(getBookingPopulates());
+    // 🚀 CRITICAL MOCK TICKET FIX: 
+    // If scanning a legacy frontend-generated ticket (TKT-1234-SPLIT-1), 
+    // strip the '-SPLIT-1' so MongoDB can actually find the main ticket.
+    const searchId = id.includes('-SPLIT-') ? id.split('-SPLIT-')[0] : id;
 
-    // If not found by main id, search inside individualTickets array (multi-ticket QR flow)
+    let booking = await Booking.findOne({ ticketId: searchId }).populate(getBookingPopulates());
+
     if (!booking) {
-      booking = await Booking.findOne({ 'individualTickets.subTicketId': id }).populate(getBookingPopulates());
+      booking = await Booking.findOne({ 'individualTickets.subTicketId': searchId }).populate(getBookingPopulates());
     }
 
     if (!booking) return res.status(404).json({ success: false, message: 'Invalid or fake ticket.' });
 
-    // Attach which sub-ticket was scanned so the verify page can highlight it
     const scannedSubTicket = booking.individualTickets?.find(t => t.subTicketId === id) || null;
 
     res.status(200).json({
       success: true,
       data: booking,
-      scannedSubTicketId: scannedSubTicket?.subTicketId || null,
-      subTicketCheckedIn: scannedSubTicket?.isCheckedIn || false
+      scannedSubTicketId: id.includes('-SPLIT-') ? id : (scannedSubTicket?.subTicketId || null),
+      subTicketCheckedIn: id.includes('-SPLIT-') ? booking.isCheckedIn : (scannedSubTicket?.isCheckedIn || false)
     });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Server Error during verification' });
@@ -495,9 +471,7 @@ export const getOrganizerBookings = async (req, res) => {
       ]
     };
 
-    if (!bookingQuery.$or.length) {
-      return res.status(200).json({ success: true, count: 0, data: [] });
-    }
+    if (!bookingQuery.$or.length) return res.status(200).json({ success: true, count: 0, data: [] });
 
     const bookings = await Booking.find({ ...bookingQuery, status: { $ne: 'Locked' } })
       .populate(getBookingPopulates())
@@ -525,9 +499,14 @@ export const splitTicket = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { targetEmail, splitQuantity, subTicketId } = req.body;
+    const { targetEmail, subTicketId } = req.body;
     const bookingId = req.params.id;
     const userId = req.user.id;
+
+    if (!subTicketId) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: 'Ticket ID to share is required.' });
+    }
 
     const targetUser = await mongoose.model('User').findOne({ email: targetEmail.toLowerCase().trim() }).session(session);
     if (!targetUser) {
@@ -553,112 +532,70 @@ export const splitTicket = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Cannot split a single ticket.' });
     }
 
-    // ── Determine which sub-tickets to transfer ─────────────────────────────
-    let subTicketsToTransfer = [];
-    let transferQty;
+    const hasIndividualTickets = Array.isArray(originalBooking.individualTickets) && originalBooking.individualTickets.length > 0;
+    
+    if (!hasIndividualTickets) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: 'This old booking format cannot be split.' });
+    }
+
+    const subIdx = originalBooking.individualTickets.findIndex(t => t.subTicketId === subTicketId && !t.isTransferred);
+    if (subIdx === -1) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: 'Ticket not found or already transferred.' });
+    }
+
+    const subTicketsToTransfer = [originalBooking.individualTickets[subIdx]];
+    
     let seatsToTransfer = [];
     let detailsToTransfer = [];
 
-    const hasIndividualTickets = Array.isArray(originalBooking.individualTickets) &&
-      originalBooking.individualTickets.length > 0;
-
-    if (subTicketId) {
-      // Mode A — transfer exactly this one sub-ticket
-      const subIdx = hasIndividualTickets
-        ? originalBooking.individualTickets.findIndex(t => t.subTicketId === subTicketId && !t.isTransferred)
-        : -1;
-      
-      if (subIdx === -1) {
-        await session.abortTransaction();
-        return res.status(400).json({ success: false, message: 'Sub-ticket not found or already transferred.' });
-      }
-      
-      subTicketsToTransfer = [originalBooking.individualTickets[subIdx]];
-      transferQty = 1;
-
-      // CRITICAL FIX: Extract the EXACT seat corresponding to this ticket index
-      if (originalBooking.seats && originalBooking.seats.length > subIdx) {
-        seatsToTransfer = [originalBooking.seats[subIdx]];
-        originalBooking.seats.splice(subIdx, 1); // Remove specific seat
-      }
-      if (originalBooking.seatDetails && originalBooking.seatDetails.length > subIdx) {
-        detailsToTransfer = [originalBooking.seatDetails[subIdx]];
-        originalBooking.seatDetails.splice(subIdx, 1); // Remove specific details
-      }
-
-    } else {
-      // Mode B — quantity-based (Legacy Fallback)
-      transferQty = Number(splitQuantity);
-      if (transferQty >= originalBooking.quantity || transferQty <= 0) {
-        await session.abortTransaction();
-        return res.status(400).json({ success: false, message: 'Invalid split quantity.' });
-      }
-      if (hasIndividualTickets) {
-        const untransferred = originalBooking.individualTickets.filter(t => !t.isTransferred);
-        subTicketsToTransfer = untransferred.slice(0, transferQty);
-      }
-
-      // Legacy slice from end
-      seatsToTransfer = originalBooking.seats.slice(-transferQty);
-      detailsToTransfer = originalBooking.seatDetails ? originalBooking.seatDetails.slice(-transferQty) : [];
-
-      originalBooking.seats = originalBooking.seats.slice(0, -transferQty);
-      originalBooking.seatDetails = originalBooking.seatDetails ? originalBooking.seatDetails.slice(0, -transferQty) : [];
+    if (originalBooking.seats && originalBooking.seats.length > subIdx) {
+      seatsToTransfer = [originalBooking.seats[subIdx]];
+      originalBooking.seats.splice(subIdx, 1);
+    }
+    if (originalBooking.seatDetails && originalBooking.seatDetails.length > subIdx) {
+      detailsToTransfer = [originalBooking.seatDetails[subIdx]];
+      originalBooking.seatDetails.splice(subIdx, 1);
     }
 
     const pricePerTicket = originalBooking.ticketPrice;
-    const originalNewQuantity = originalBooking.quantity - transferQty;
+    const originalNewQuantity = originalBooking.quantity - 1;
 
-    // ── Update original booking ──────────────────────────────────────────────
     originalBooking.quantity = originalNewQuantity;
     originalBooking.subtotal = originalNewQuantity * pricePerTicket;
     originalBooking.totalAmount = originalBooking.subtotal + originalBooking.convenienceFee + originalBooking.gatewayCharge;
 
-    // Remove transferred sub-tickets from original booking
-    if (hasIndividualTickets && subTicketsToTransfer.length) {
-      const transferIds = new Set(subTicketsToTransfer.map(t => t.subTicketId));
-      originalBooking.individualTickets = originalBooking.individualTickets.filter(t => !transferIds.has(t.subTicketId));
-    }
-
+    originalBooking.individualTickets.splice(subIdx, 1);
     await originalBooking.save({ session });
 
-    // ── Build new booking for recipient ─────────────────────────────────────
     const originalObj = originalBooking.toObject();
     delete originalObj._id;
     delete originalObj.ticketId;
     delete originalObj.individualTickets;
     delete originalObj.__v;
 
-    // Moved sub-tickets get a fresh slate for the recipient (not yet checked in, not transferred)
-    const newIndividualTickets = subTicketsToTransfer.length
-      ? subTicketsToTransfer.map(t => ({
-          subTicketId: t.subTicketId, // Same QR code — uniqueness preserved by removal above
-          isCheckedIn: false,
-          checkedInAt: null,
-          isTransferred: false,
-          transferredToEmail: null
-        }))
-      : Array.from({ length: transferQty }, () => ({
-          subTicketId: buildTicketId(), // Old bookings without individualTickets: generate fresh
-          isCheckedIn: false,
-          checkedInAt: null,
-          isTransferred: false,
-          transferredToEmail: null
-        }));
+    const newIndividualTickets = [{
+      subTicketId: subTicketsToTransfer[0].subTicketId,
+      isCheckedIn: false,
+      checkedInAt: null,
+      isTransferred: false,
+      transferredToEmail: null
+    }];
 
     const [newBooking] = await Booking.create(
       [{
         ...originalObj,
         user: targetUser._id,
-        ticketId: buildTicketId(), // Proper unique ID — NOT the old weak TKT-TRF-NNNNN format
+        ticketId: buildTicketId(),
         individualTickets: newIndividualTickets,
-        quantity: transferQty,
+        quantity: 1,
         seats: seatsToTransfer,
         seatDetails: detailsToTransfer,
-        subtotal: transferQty * pricePerTicket,
+        subtotal: pricePerTicket,
         convenienceFee: 0,
         gatewayCharge: 0,
-        totalAmount: transferQty * pricePerTicket,
+        totalAmount: pricePerTicket,
         isTransferred: true,
         isCheckedIn: false,
         checkInTime: null
@@ -670,7 +607,7 @@ export const splitTicket = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: `Successfully transferred ${transferQty} ticket(s) to ${targetUser.name}!`,
+      message: `Successfully transferred 1 ticket to ${targetUser.name}!`,
       data: newBooking
     });
 
@@ -687,12 +624,10 @@ export const scanAndCheckInTicket = async (req, res) => {
     const { ticketId } = req.body;
     if (!ticketId) return res.status(400).json({ success: false, message: 'Ticket ID is required.' });
 
-    // ── Lookup: try main ticketId first, then sub-ticketId ──────────────────
     let booking = await Booking.findOne({ ticketId }).populate(getBookingPopulates());
     let subTicketIndex = -1;
 
     if (!booking) {
-      // This is a sub-ticket QR (individual person's ticket from a multi-ticket booking)
       booking = await Booking.findOne({ 'individualTickets.subTicketId': ticketId }).populate(getBookingPopulates());
       if (booking) {
         subTicketIndex = booking.individualTickets.findIndex(t => t.subTicketId === ticketId);
@@ -701,7 +636,6 @@ export const scanAndCheckInTicket = async (req, res) => {
 
     if (!booking) return res.status(404).json({ success: false, message: 'Ticket not found in the system.' });
 
-    // ── Authorization ────────────────────────────────────────────────────────
     const canScan =
       booking.event?.organizer?._id?.toString() === req.user.id ||
       booking.multiplex?.owner?._id?.toString() === req.user.id;
@@ -709,9 +643,7 @@ export const scanAndCheckInTicket = async (req, res) => {
     if (!canScan) return res.status(403).json({ success: false, message: 'You are not authorized to scan this ticket.' });
     if (booking.status === 'Cancelled') return res.status(400).json({ success: false, message: 'This ticket was cancelled and refunded.' });
 
-    // ── Check-in logic ───────────────────────────────────────────────────────
     if (subTicketIndex >= 0) {
-      // Scanning an individual person's sub-ticket QR
       const subTicket = booking.individualTickets[subTicketIndex];
       if (subTicket.isCheckedIn) {
         return res.status(400).json({
@@ -723,7 +655,6 @@ export const scanAndCheckInTicket = async (req, res) => {
       booking.individualTickets[subTicketIndex].isCheckedIn = true;
       booking.individualTickets[subTicketIndex].checkedInAt = new Date();
     } else {
-      // Scanning the main booking QR (single ticket or old booking without sub-tickets)
       if (booking.isCheckedIn) {
         return res.status(400).json({
           success: false,

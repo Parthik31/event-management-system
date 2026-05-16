@@ -18,7 +18,19 @@ const VerifyTicket = () => {
   useEffect(() => {
     const verifyTicket = async () => {
       try {
-        const res = await api.get(`/bookings/verify/${id}`);
+        // 🚀 SMART HOTSPOT FIX: If accessing from phone via 192.168.x.x, 
+        // temporarily rewrite the Axios baseURL to point to the laptop instead of 'localhost'
+        let requestConfig = {};
+        if (window.location.hostname.match(/^(192\.168\.|172\.|10\.)/)) {
+          const currentBase = api.defaults.baseURL || 'http://localhost:5000/api';
+          if (currentBase.includes('localhost') || currentBase.includes('127.0.0.1')) {
+            requestConfig.baseURL = currentBase.replace(/localhost|127\.0\.0\.1/, window.location.hostname);
+          }
+        }
+
+        // Pass the dynamic requestConfig so the phone successfully hits the PC
+        const res = await api.get(`/bookings/verify/${id}`, requestConfig);
+        
         if (res.data.success) {
           setTicket(res.data.data);
           setScannedSubTicketId(res.data.scannedSubTicketId || null);
@@ -28,7 +40,11 @@ const VerifyTicket = () => {
         }
       } catch (error) {
         setInvalid(true);
-        setErrorMsg(error.response?.data?.message || 'Verification Failed');
+        if (error.message === 'Network Error') {
+           setErrorMsg('Cannot reach backend server. Make sure your PC firewall allows local network connections.');
+        } else {
+           setErrorMsg(error.response?.data?.message || 'Verification Failed. Invalid Ticket.');
+        }
       } finally {
         setLoading(false);
       }
@@ -53,7 +69,7 @@ const VerifyTicket = () => {
             <XCircle className="w-10 h-10 text-red-600" />
           </div>
           <h2 className="text-2xl font-black text-gray-900 mb-2">Invalid Ticket</h2>
-          <p className="text-red-500 font-medium mb-8">{errorMsg || "This ticket does not exist or has been cancelled."}</p>
+          <p className="text-red-500 font-medium mb-8">{errorMsg}</p>
           <div className="p-4 bg-gray-50 rounded-xl text-sm text-gray-500 font-mono break-all">
             Scanned ID: {id}
           </div>
@@ -62,11 +78,7 @@ const VerifyTicket = () => {
     );
   }
 
-  // ── Null-safe data derivation ────────────────────────────────────────────────
-  // Booking can be an Event booking OR a Movie booking.
-  // For Movie bookings: ticket.event is null — use movie/show data instead.
   const { user, quantity, ticketId, itemType, event, movie, show } = ticket;
-
   const isMovieTicket = itemType === 'Movie' || (!event && (movie || show));
 
   const displayTitle  = isMovieTicket
@@ -85,7 +97,6 @@ const VerifyTicket = () => {
     ? (show?.multiplex?.multiplexName || show?.multiplex?.name || 'Cinema Hall')
     : (event?.location || 'N/A');
 
-  // Find which individual sub-ticket was scanned (for multi-ticket bookings)
   const subTickets = ticket.individualTickets || [];
   const scannedSubTicket = scannedSubTicketId
     ? subTickets.find(t => t.subTicketId === scannedSubTicketId)
@@ -94,30 +105,20 @@ const VerifyTicket = () => {
     ? subTickets.indexOf(scannedSubTicket) + 1
     : null;
 
-  // ── Display ticket ID: prefer scanned sub-ticket ID, fall back to main ID ──
   const displayTicketId = scannedSubTicketId || ticketId;
   const displayQuantity = scannedSubTicketId ? 1 : quantity;
 
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center px-4 py-8 font-sans">
       <div className="max-w-sm w-full relative">
-
-        {/* Verified Badge */}
         <div className="absolute -top-6 left-1/2 -translate-x-1/2 z-10 bg-green-500 text-white px-6 py-2 rounded-full font-bold flex items-center gap-2 shadow-lg shadow-green-500/30">
           <CheckCircle className="w-5 h-5" /> VERIFIED
         </div>
-
         <div className="bg-white rounded-4xl overflow-hidden shadow-2xl">
-
-          {/* Header */}
           <div className="bg-orange-500 p-8 pt-10 text-center text-white relative">
-            {isMovieTicket
-              ? <Film className="w-12 h-12 mx-auto mb-3 opacity-90" />
-              : <Ticket className="w-12 h-12 mx-auto mb-3 opacity-90" />
-            }
+            {isMovieTicket ? <Film className="w-12 h-12 mx-auto mb-3 opacity-90" /> : <Ticket className="w-12 h-12 mx-auto mb-3 opacity-90" />}
             <h2 className="text-2xl font-black leading-tight mb-1">{displayTitle}</h2>
-
-            {/* Show which individual ticket this is (e.g., Ticket 2 of 4) */}
+            
             {subTicketNumber && (
               <p className="inline-block bg-white/20 px-3 py-1 rounded-full text-sm font-bold mt-2">
                 Ticket {subTicketNumber} of {subTickets.length}
@@ -132,12 +133,8 @@ const VerifyTicket = () => {
             <div className="absolute -bottom-4 -left-4 w-8 h-8 bg-gray-900 rounded-full"></div>
             <div className="absolute -bottom-4 -right-4 w-8 h-8 bg-gray-900 rounded-full"></div>
           </div>
-
           <div className="border-b-2 border-dashed border-gray-200 mx-8"></div>
-
           <div className="p-8 space-y-6">
-
-            {/* Date & Time */}
             <div className="flex items-start gap-4">
               <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center shrink-0">
                 <Calendar className="w-5 h-5 text-orange-600" />
@@ -147,8 +144,6 @@ const VerifyTicket = () => {
                 <p className="font-bold text-gray-900">{displayDate} at {displayTime}</p>
               </div>
             </div>
-
-            {/* Venue */}
             <div className="flex items-start gap-4">
               <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center shrink-0">
                 <MapPin className="w-5 h-5 text-orange-600" />
@@ -158,8 +153,6 @@ const VerifyTicket = () => {
                 <p className="font-bold text-gray-900">{displayVenue}</p>
               </div>
             </div>
-
-            {/* Purchased By */}
             <div className="flex items-start gap-4">
               <div className="w-10 h-10 bg-gray-50 rounded-full flex items-center justify-center shrink-0">
                 <User className="w-5 h-5 text-gray-600" />
@@ -169,8 +162,6 @@ const VerifyTicket = () => {
                 <p className="font-bold text-gray-900">{user?.name || 'Guest'}</p>
               </div>
             </div>
-
-            {/* Ticket ID + Admit count */}
             <div className="bg-gray-50 rounded-2xl p-5 border border-gray-100 flex justify-between items-center mt-4">
               <div>
                 <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
@@ -185,10 +176,7 @@ const VerifyTicket = () => {
             </div>
           </div>
         </div>
-
-        <p className="text-center text-gray-500 text-xs mt-6 font-medium">
-          Powered by EventBook Validation System
-        </p>
+        <p className="text-center text-gray-500 text-xs mt-6 font-medium">Powered by EventBook Validation System</p>
       </div>
     </div>
   );

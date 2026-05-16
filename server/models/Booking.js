@@ -140,7 +140,7 @@ const bookingSchema = new mongoose.Schema(
       min: 0,
     },
     
-    // 🚀 NEW: Tracks which specific seats this user bought
+    // Tracks which specific seats this user bought
     seats: {
       type: [String], 
       default: []
@@ -150,7 +150,7 @@ const bookingSchema = new mongoose.Schema(
       default: []
     },
     
-    // 🚀 NEW: QR Code Scanner Entry Tracking
+    // QR Code Scanner Entry Tracking (Legacy / Group Check-in)
     isCheckedIn: {
       type: Boolean,
       default: false

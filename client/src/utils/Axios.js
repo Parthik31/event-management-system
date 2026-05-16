@@ -93,13 +93,40 @@ const shouldRetryRequest = (error) => {
   return [408, 425, 429, 500, 502, 503, 504].includes(error.response.status);
 };
 
+// GLOBAL NETWORK DETECTOR
+// Changes localhost to the phone's IP address automatically
+const getBaseUrl = () => {
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  
+  const host = window.location.hostname;
+  if (host.match(/^(192\.168\.|172\.|10\.)/)) {
+    return `http://${host}:5000/api/v1`; 
+  }
+  
+  return 'http://localhost:5000/api/v1';
+};
+
+const baseURL = getBaseUrl();
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1',
+  baseURL,
   withCredentials: true,
   timeout: DEFAULT_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },
+});
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token'); 
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+}, (error) => {
+  return Promise.reject(error);
 });
 
 api.interceptors.response.use(
@@ -137,7 +164,7 @@ api.interceptors.response.use(
         toast.error('Session expired. Please log in again.');
 
         setTimeout(() => {
-          window.isLoggingOut = false; // BUG-06 FIX: reset so future sessions work correctly
+          window.isLoggingOut = false; 
           window.location.href = '/login';
         }, 1500);
       }
@@ -211,13 +238,10 @@ export const clearApiCache = (matcher) => {
 
 export const resolveMediaUrl = (url) => {
   if (!url) return '/placeholder-image.jpg';
-  if (url.startsWith('http')) return url;
+  if (url.startsWith('http') || url.startsWith('data:')) return url;
 
-  const baseUrl = import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace('/api/v1', '')
-    : 'http://localhost:5000';
-
-  return `${baseUrl}${url}`;
+  const base = baseURL.replace('/api/v1', '');
+  return `${base}${url}`;
 };
 
 export default api;

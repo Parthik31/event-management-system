@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  Download, Share2, Scissors, QrCode, Loader2, X,
-  Network, Save, Send, ChevronLeft, ChevronRight, CheckCircle2
+  Download, Share2, Scissors, QrCode, Loader2, X, Send, CheckCircle2, Copy, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import api, { resolveMediaUrl } from '../../utils/Axios';
 import QRCode from 'react-qr-code';
@@ -10,20 +9,16 @@ import { toast } from 'react-hot-toast';
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
-/**
- * ROOT CAUSE FIX (QR URL):
- * Old code always generated `http://${ip}:5173/verify/${id}`.
- * In Netlify production, port 5173 doesn't exist — all QR codes were dead links.
- *
- * Fix: use window.location.origin in production (HTTPS + correct domain).
- * Only use the saved local network IP on localhost (cross-device dev testing).
- */
-const buildVerifyUrl = (ticketId, networkIp) => {
-  const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-  if (isLocalhost && networkIp) {
-    return `http://${networkIp}:5173/verify/${ticketId}`;
+const getDevIp = () => localStorage.getItem('eventbook_dev_ip') || '192.168.1.8';
+
+// Smart URL Builder: Uses dynamic local IP during dev, and real origin in production.
+const buildVerifyUrl = (ticketId) => {
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  if (isLocalhost) {
+    const port = window.location.port || '5173';
+    return `http://${getDevIp()}:${port}/verify/${ticketId || ''}`;
   }
-  return `${window.location.origin}/verify/${ticketId}`;
+  return `${window.location.origin}/verify/${ticketId || ''}`;
 };
 
 // ─── COMPONENT ──────────────────────────────────────────────────────────────
@@ -33,28 +28,13 @@ const MyTickets = () => {
   const [loading, setLoading] = useState(true);
   const [selectedTicket, setSelectedTicket] = useState(null);
 
-  // ── Individual ticket navigation (multi-ticket QR view) ──────────────────
-  const [activeSubTicketIndex, setActiveSubTicketIndex] = useState(0);
-
   // ── Split / share states ─────────────────────────────────────────────────
   const [splitMode, setSplitMode] = useState(false);
-  // Per-ticket sharing: which subTicketId is currently being shared
   const [sharingSubTicketId, setSharingSubTicketId] = useState(null);
   const [shareEmail, setShareEmail] = useState('');
   const [isSplitting, setIsSplitting] = useState(false);
 
-  // ── Legacy quantity-based split (for old bookings without individualTickets) ─
-  const [legacyTargetEmail, setLegacyTargetEmail] = useState('');
-  const [legacySplitQuantity, setLegacySplitQuantity] = useState(1);
-
-  // ── Local network IP (only relevant for localhost dev) ───────────────────
-  const autoIp = window.location.hostname !== 'localhost' ? window.location.hostname : '';
-  const [networkIp, setNetworkIp] = useState(
-    localStorage.getItem('eventbook_ip_v3') ||
-    localStorage.getItem('eventbook_ip_v2') ||
-    autoIp
-  );
-  const [tempIp, setTempIp] = useState(autoIp);
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
   // ── Derived helpers ──────────────────────────────────────────────────────
   const getTicketTitle  = useCallback((b) => b.event?.title || b.movie?.title || b.show?.movie?.title || 'Ticket', []);
@@ -65,41 +45,28 @@ const MyTickets = () => {
   // ── Open modal ───────────────────────────────────────────────────────────
   const openTicketModal = (booking) => {
     setSelectedTicket(booking);
-    setActiveSubTicketIndex(0);
     setSplitMode(false);
     setSharingSubTicketId(null);
     setShareEmail('');
-    setLegacyTargetEmail('');
-    setLegacySplitQuantity(1);
   };
 
-  // ── Individual ticket data ───────────────────────────────────────────────
-  // If booking has individualTickets (new bookings), use those.
-  // Old bookings without individualTickets fall back to the single main ticketId.
+  // ── Individual ticket data (Bulletproof Fallbacks) ───────────────────────
   const getIndividualTickets = (booking) => {
     if (!booking) return [];
-    const ind = booking.individualTickets;
-    if (Array.isArray(ind) && ind.length > 0) return ind;
-    return []; // old booking — handled by fallback path
+    
+    if (Array.isArray(booking.individualTickets) && booking.individualTickets.length > 0) {
+      return booking.individualTickets.filter(t => t && t.subTicketId);
+    }
+    
+    if (booking.quantity > 1) {
+      return Array.from({ length: booking.quantity }, (_, i) => ({
+        subTicketId: `${booking.ticketId || 'TKT'}-SPLIT-${i + 1}`,
+        isCheckedIn: Boolean(booking.isCheckedIn),
+        isTransferred: Boolean(booking.isTransferred)
+      }));
+    }
+    return []; 
   };
-
-  // Which QR value should the current active view show
-  const getActiveQrValue = useCallback(() => {
-    if (!selectedTicket) return '';
-    const individual = getIndividualTickets(selectedTicket);
-    const activeId = individual.length > 0
-      ? individual[activeSubTicketIndex]?.subTicketId
-      : selectedTicket.ticketId;
-    return buildVerifyUrl(activeId || selectedTicket.ticketId, networkIp);
-  }, [selectedTicket, activeSubTicketIndex, networkIp]);
-
-  const getActiveTicketId = useCallback(() => {
-    if (!selectedTicket) return '';
-    const individual = getIndividualTickets(selectedTicket);
-    return individual.length > 0
-      ? individual[activeSubTicketIndex]?.subTicketId || selectedTicket.ticketId
-      : selectedTicket.ticketId;
-  }, [selectedTicket, activeSubTicketIndex]);
 
   // ── Fetch bookings ───────────────────────────────────────────────────────
   const fetchBookings = async () => {
@@ -115,28 +82,20 @@ const MyTickets = () => {
 
   useEffect(() => { fetchBookings(); }, []);
 
-  // ── IP save/reset (localhost dev only) ───────────────────────────────────
-  const handleSaveIp = () => {
-    if (!tempIp.trim()) return toast.error('Please enter a valid IP');
-    setNetworkIp(tempIp.trim());
-    localStorage.setItem('eventbook_ip_v3', tempIp.trim());
-    localStorage.setItem('eventbook_ip_v2', tempIp.trim());
-    toast.success('IP Saved! QR Code Generated.');
-  };
-
-  const handleResetIp = () => {
-    setNetworkIp('');
-    localStorage.removeItem('eventbook_ip_v3');
-    localStorage.removeItem('eventbook_ip_v2');
-    setTempIp('');
+  // ── Hidden Dev IP Changer ────────────────────────────────────────────────
+  const handleEditDevIp = () => {
+    const currentIp = getDevIp();
+    const newIp = window.prompt("College Hotspot detected? Enter your new laptop IPv4 address:", currentIp);
+    if (newIp && newIp.trim() !== "") {
+      localStorage.setItem('eventbook_dev_ip', newIp.trim());
+      // Force re-render to update QR codes if modal is open
+      setBookings([...bookings]); 
+      toast.success(`Dev IP updated to ${newIp.trim()}`);
+    }
   };
 
   // ────────────────────────────────────────────────────────────────────────────
-  // PDF GENERATOR
-  // ROOT CAUSE FIX (PDF):
-  // Old code used btoa(xml) which fails on mobile/Safari when SVG contains
-  // special characters or Unicode. Now uses Blob URL approach which is
-  // universally compatible. Also targets the correct QR wrapper by index.
+  // PDF GENERATOR (MOBILE SAFE)
   // ────────────────────────────────────────────────────────────────────────────
   const downloadPDF = async () => {
     const toastId = toast.loading('Generating VIP Ticket...');
@@ -192,27 +151,18 @@ const MyTickets = () => {
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
-      // If showing a specific sub-ticket, admit is 1 person
-      const admitCount = getIndividualTickets(selectedTicket).length > 0 ? 1 : selectedTicket.quantity;
-      doc.text(`ADMIT: ${admitCount}`, 18, ticketHeight - 9.5);
+      doc.text(`ADMIT: ${selectedTicket.quantity}`, 18, ticketHeight - 9.5);
 
-      // ── QR Code embedding (mobile-safe Blob URL approach) ─────────────────
-      // Target the currently active QR wrapper in the DOM
-      const wrapperId = getIndividualTickets(selectedTicket).length > 0
-        ? `qr-wrapper-${activeSubTicketIndex}`
-        : 'qr-wrapper-main';
-      const wrapper = document.getElementById(wrapperId);
+      // QR Code embedding (Always uses the main group QR)
+      const wrapper = document.getElementById('qr-wrapper-main');
       const svg = wrapper ? wrapper.querySelector('svg') : null;
 
       if (svg) {
         let xml = new XMLSerializer().serializeToString(svg);
-
-        // CRITICAL FIX: iOS/Safari fails to render SVG blobs without the XMLNS namespace explicitly defined.
         if (!xml.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
           xml = xml.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
         }
 
-        // Blob URL: works everywhere including iOS Safari
         const svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
         const svgUrl = URL.createObjectURL(svgBlob);
 
@@ -227,7 +177,7 @@ const MyTickets = () => {
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0);
-            URL.revokeObjectURL(svgUrl); // cleanup
+            URL.revokeObjectURL(svgUrl); 
 
             doc.setFillColor(255, 255, 255);
             doc.roundedRect(stubX + 13, 12, 34, 34, 2, 2, 'F');
@@ -242,8 +192,6 @@ const MyTickets = () => {
         });
       }
 
-      // Ticket ID on stub
-      const pdfTicketId = getActiveTicketId();
       doc.setFontSize(8);
       doc.setTextColor(156, 163, 175);
       doc.setFont('helvetica', 'normal');
@@ -251,9 +199,19 @@ const MyTickets = () => {
       doc.setFontSize(9);
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.text(pdfTicketId, stubX + 30, 62, { align: 'center' });
+      doc.text(selectedTicket.ticketId || 'TKT', stubX + 30, 62, { align: 'center' });
 
-      doc.save(`EventBook-${pdfTicketId}.pdf`);
+      // MOBILE FIX: Use a secure Blob download instead of base64
+      const pdfBlob = doc.output('blob');
+      const pdfUrl = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = pdfUrl;
+      link.download = `EventBook-${selectedTicket.ticketId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(pdfUrl), 100);
+
       toast.success('VIP Ticket Downloaded!', { id: toastId });
     } catch (err) {
       console.error('PDF error:', err);
@@ -262,12 +220,23 @@ const MyTickets = () => {
   };
 
   // ────────────────────────────────────────────────────────────────────────────
-  // SHARE
+  // SHARE LINKS
   // ────────────────────────────────────────────────────────────────────────────
-  const handleShare = async () => {
-    const url = getActiveQrValue();
+  
+  const handleShareMain = async () => {
+    const url = buildVerifyUrl(selectedTicket?.ticketId);
     if (navigator.share) {
       try { await navigator.share({ title: 'Event Ticket', url }); } catch { /* user dismissed */ }
+    } else {
+      navigator.clipboard.writeText(url);
+      toast.success('Ticket Link Copied!');
+    }
+  };
+
+  const shareSubTicketLink = async (subTicketId) => {
+    const url = buildVerifyUrl(subTicketId);
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Your Event Ticket', url }); } catch { /* user dismissed */ }
     } else {
       navigator.clipboard.writeText(url);
       toast.success('Link Copied to clipboard!');
@@ -275,20 +244,19 @@ const MyTickets = () => {
   };
 
   // ────────────────────────────────────────────────────────────────────────────
-  // SPLIT — share a specific individual sub-ticket to someone's account
-  // ROOT CAUSE FIX (Split):
-  // Old code showed the split button always and had one email + one quantity input.
-  // Required: show split only when qty > 1; show individual ticket QRs; allow
-  // per-ticket sharing so each person gets their own unique QR.
+  // SPLIT — Email exactly one specific individual sub-ticket
   // ────────────────────────────────────────────────────────────────────────────
   const handleShareSpecificTicket = async (subTicketId) => {
+    if (String(subTicketId).includes('-SPLIT-')) {
+      return toast.error("This is a legacy booking. Please make a new booking to use individual ticket splitting.");
+    }
     if (!shareEmail.trim()) return toast.error("Enter your friend's email.");
+    
     setIsSplitting(true);
     try {
       const { data } = await api.post(`/bookings/${selectedTicket._id}/split`, {
         targetEmail: shareEmail.trim(),
-        subTicketId,          // New: transfer exactly this sub-ticket
-        splitQuantity: 1      // Always 1 when using per-ticket share
+        subTicketId: String(subTicketId)
       });
 
       if (data.success) {
@@ -296,10 +264,10 @@ const MyTickets = () => {
         setSharingSubTicketId(null);
         setShareEmail('');
 
-        // Optimistic update: mark sub-ticket as transferred in local state
+        // Update local UI immediately
         setSelectedTicket(prev => ({
           ...prev,
-          quantity: prev.quantity - 1,
+          quantity: Math.max(1, prev.quantity - 1),
           individualTickets: prev.individualTickets.map(t =>
             t.subTicketId === subTicketId
               ? { ...t, isTransferred: true, transferredToEmail: shareEmail.trim() }
@@ -307,7 +275,7 @@ const MyTickets = () => {
           )
         }));
         setBookings(prev => prev.map(b =>
-          b._id === selectedTicket._id ? { ...b, quantity: b.quantity - 1 } : b
+          b._id === selectedTicket._id ? { ...b, quantity: Math.max(1, b.quantity - 1) } : b
         ));
 
         if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
@@ -318,37 +286,6 @@ const MyTickets = () => {
       setIsSplitting(false);
     }
   };
-
-  // Legacy split for old bookings without individualTickets
-  const handleLegacySplit = async () => {
-    if (!legacyTargetEmail.trim()) return toast.error("Enter your friend's email.");
-    const qty = Number(legacySplitQuantity);
-    if (qty >= selectedTicket.quantity || qty < 1) return toast.error('Invalid transfer quantity.');
-    setIsSplitting(true);
-    try {
-      const { data } = await api.post(`/bookings/${selectedTicket._id}/split`, {
-        targetEmail: legacyTargetEmail.trim(),
-        splitQuantity: qty
-      });
-      if (data.success) {
-        toast.success(data.message);
-        setSplitMode(false);
-        setSelectedTicket(prev => ({ ...prev, quantity: prev.quantity - qty }));
-        setBookings(prev => prev.map(b =>
-          b._id === selectedTicket._id ? { ...b, quantity: b.quantity - qty } : b
-        ));
-        if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
-      }
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Transfer failed.');
-    } finally {
-      setIsSplitting(false);
-    }
-  };
-
-  // ────────────────────────────────────────────────────────────────────────────
-  // RENDER
-  // ────────────────────────────────────────────────────────────────────────────
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -359,7 +296,21 @@ const MyTickets = () => {
   return (
     <div className="min-h-screen bg-gray-50 py-12">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">My Tickets</h1>
+        
+        <div className="flex items-baseline mb-8 gap-4">
+          <h1 className="text-3xl font-bold text-gray-900">My Tickets</h1>
+          
+          {/* INVISIBLE DEV TOOL: Only shows on Localhost. Click to change IP easily */}
+          {isLocalhost && (
+            <span 
+              onClick={handleEditDevIp} 
+              className="text-xs text-gray-400 cursor-pointer hover:text-orange-500 transition-colors hidden sm:inline-block"
+              title="Click to change your Dev IP for mobile scanning"
+            >
+              (Dev IP: {getDevIp()} ✎)
+            </span>
+          )}
+        </div>
 
         {bookings.length > 0 ? (
           <div className="space-y-6">
@@ -399,26 +350,15 @@ const MyTickets = () => {
 
         {/* ── TICKET MODAL ────────────────────────────────────────────────── */}
         {selectedTicket && (() => {
+          // Wrap everything in safe derivation to prevent crashing
           const individual = getIndividualTickets(selectedTicket);
           const hasIndividual = individual.length > 0;
-          const safeIndex = Math.min(activeSubTicketIndex, Math.max(0, individual.length - 1));
-          const activeSubTicket = hasIndividual ? individual[safeIndex] : null;
-          const isOnlyLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-          const needsIpSetup = isOnlyLocalhost && !networkIp;
-
-          // Split button: only show if qty > 1
           const canSplit = selectedTicket.quantity > 1;
-
-          // For split mode: untransferred individual tickets
-          const untransferredTickets = hasIndividual
-            ? individual.filter(t => !t.isTransferred)
-            : [];
 
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/80 backdrop-blur-sm animate-fade-in">
               <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95">
 
-                {/* Modal Header */}
                 <div className="flex justify-between items-center p-4 border-b border-gray-100 bg-gray-50 shrink-0">
                   <h3 className="font-bold text-gray-700">Digital Ticket</h3>
                   <button onClick={() => setSelectedTicket(null)} className="cursor-pointer hover:bg-gray-200 p-1 rounded-full transition-colors">
@@ -427,309 +367,163 @@ const MyTickets = () => {
                 </div>
 
                 <div className="p-6 overflow-y-auto custom-scrollbar flex-1 bg-gray-50">
+                  <div className="flex flex-col mx-auto w-full max-w-md">
 
-                  {/* ── IP Setup (localhost dev only) ──────────────────────── */}
-                  {needsIpSetup ? (
-                    <div className="bg-orange-50 border border-orange-200 p-6 rounded-2xl text-center mb-6">
-                      <Network className="w-10 h-10 text-orange-500 mx-auto mb-3" />
-                      <h3 className="font-bold text-gray-900 mb-2">Network Setup Required</h3>
-                      <p className="text-sm text-gray-600 mb-4">Enter your local IP for cross-device QR scanning.</p>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={tempIp}
-                          onChange={(e) => setTempIp(e.target.value)}
-                          className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-center focus:ring-2 focus:ring-orange-500 outline-none"
-                        />
-                        <button onClick={handleSaveIp} className="px-6 py-2 bg-orange-600 text-white font-bold rounded-lg hover:bg-orange-700 flex items-center gap-2 cursor-pointer transition-colors">
-                          <Save className="w-4 h-4" /> Save
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col mx-auto w-full max-w-md">
-
-                      {/* ── PREMIUM DIGITAL WALLET CARD ─────────────────────── */}
-                      <div className="relative mb-6 overflow-hidden rounded-3xl bg-slate-900 p-6 text-white shadow-2xl">
-                        <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-orange-500/20 blur-3xl"></div>
-
-                        {/* Title + Admits */}
-                        <div className="mb-6 flex items-start justify-between border-b border-white/10 pb-6 relative z-10">
-                          <div className="pr-4">
-                            <div className="mb-2 inline-block rounded border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-orange-400">
-                              {selectedTicket.itemType === 'Movie' ? 'Cinema Admission' : 'Event Entry'}
-                            </div>
-                            <h3 className="text-2xl font-black leading-tight text-white">
-                              {getTicketTitle(selectedTicket)}
-                            </h3>
-                          </div>
-                          <div className="shrink-0 rounded-xl bg-white/10 px-4 py-2 backdrop-blur-md border border-white/5">
-                            <span className="block text-center text-[10px] font-bold uppercase tracking-widest text-white/50">Admits</span>
-                            <span className="block text-center text-3xl font-black text-white">{selectedTicket.quantity}</span>
-                          </div>
+                    {/* ── VIEW A: MULTIPLE DIVIDED QRs (SPLIT MODE) ────────── */}
+                    {splitMode ? (
+                      <div className="animate-fade-in">
+                        <div className="mb-6 flex items-center justify-between">
+                          <h4 className="text-lg font-black text-slate-900">Distribute Tickets</h4>
+                          <button onClick={() => { setSplitMode(false); setSharingSubTicketId(null); }} className="text-sm font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1 cursor-pointer">
+                            <ChevronLeft className="w-4 h-4"/> Back
+                          </button>
                         </div>
+                        
+                        <p className="text-sm text-gray-500 font-medium mb-4">
+                          Your order has been split. Each ticket below has a unique QR code. You can share a direct link or transfer ownership via email.
+                        </p>
 
-                        {/* Venue & Timing */}
-                        <div className="mb-6 grid grid-cols-2 gap-4 relative z-10">
-                          <div>
-                            <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-white/40">Date & Time</span>
-                            <p className="text-sm font-bold text-white">{getTicketDate(selectedTicket)}</p>
-                            <p className="text-sm font-medium text-orange-300">{getTicketTime(selectedTicket)}</p>
-                          </div>
-                          <div>
-                            <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-white/40">Venue</span>
-                            <p className="text-sm font-bold text-white line-clamp-1">
-                              {selectedTicket.itemType === 'Movie'
-                                ? (selectedTicket.show?.multiplex?.multiplexName || 'Local Cinema')
-                                : (selectedTicket.event?.location || 'Venue TBA')}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Movie Seat Grid */}
-                        {selectedTicket.itemType === 'Movie' && selectedTicket.seats?.length > 0 && (
-                          <div className="mb-6 rounded-2xl bg-black/40 p-4 border border-white/5 relative z-10">
-                            <span className="mb-3 block text-[10px] font-bold uppercase tracking-wider text-orange-400">Seat Assignments</span>
-                            <div className="flex flex-wrap gap-2">
-                              {selectedTicket.seats.map((seatId, idx) => {
-                                const rowChar = String(seatId).replace(/[^A-Za-z]/g, '').charAt(0).toUpperCase() || '-';
-                                const seatNum = String(seatId).replace(/[^0-9]/g, '') || '-';
-                                const seatDetail = selectedTicket.seatDetails?.find(s => s.seatId === seatId);
-                                const category = seatDetail?.category || selectedTicket.categoryName || 'Standard';
-                                return (
-                                  <div key={idx} className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2">
-                                    <span className="mb-0.5 text-[8px] font-black uppercase tracking-widest text-white/50">{category}</span>
-                                    <div className="flex items-baseline gap-1">
-                                      <span className="text-lg font-black text-orange-400">{rowChar}</span>
-                                      <span className="text-lg font-black text-white">{seatNum}</span>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* ── INDIVIDUAL TICKET NAVIGATOR ───────────────────── */}
-                        {/* Only shown when booking has multiple individual sub-tickets */}
-                        {hasIndividual && individual.length > 1 && !splitMode && (
-                          <div className="mb-4 relative z-10">
-                            <div className="flex items-center justify-between bg-white/10 rounded-xl px-4 py-2 border border-white/10">
-                              <button
-                                onClick={() => setActiveSubTicketIndex(Math.max(0, safeIndex - 1))}
-                                disabled={safeIndex === 0}
-                                className="p-1 rounded-lg hover:bg-white/20 disabled:opacity-30 transition-colors cursor-pointer"
-                              >
-                                <ChevronLeft className="w-4 h-4" />
-                              </button>
-                              <div className="text-center">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-white/50 block">Viewing</span>
-                                <span className="text-sm font-black text-white">
-                                  Ticket {safeIndex + 1} of {individual.length}
-                                </span>
-                                {activeSubTicket?.isTransferred && (
-                                  <span className="block text-[10px] text-orange-400 font-bold">Transferred</span>
-                                )}
-                                {activeSubTicket?.isCheckedIn && (
-                                  <span className="block text-[10px] text-green-400 font-bold">✓ Checked In</span>
-                                )}
+                        <div className="space-y-4">
+                          {/* Defensive rendering: only render valid elements */}
+                          {individual.filter(t => t && t.subTicketId).map((subTicket, idx) => (
+                            <div key={subTicket.subTicketId} className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm flex flex-col sm:flex-row gap-4 items-center sm:items-start relative overflow-hidden">
+                              
+                              {/* Unique Small QR Code for this specific ticket */}
+                              <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 shrink-0 relative">
+                                <QRCode value={buildVerifyUrl(String(subTicket.subTicketId))} size={90} level="H" />
                               </div>
-                              <button
-                                onClick={() => setActiveSubTicketIndex(Math.min(individual.length - 1, safeIndex + 1))}
-                                disabled={safeIndex === individual.length - 1}
-                                className="p-1 rounded-lg hover:bg-white/20 disabled:opacity-30 transition-colors cursor-pointer"
-                              >
-                                <ChevronRight className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        )}
 
-                        {/* ── QR Code Area ──────────────────────────────────── */}
-                        {!splitMode && (
-                          <div className="mt-2 flex flex-col items-center justify-center overflow-hidden rounded-2xl bg-white p-6 relative z-10">
-                            <div className="absolute -left-3 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-slate-900"></div>
-                            <div className="absolute -right-3 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-slate-900"></div>
+                              <div className="flex-1 w-full text-center sm:text-left">
+                                <h5 className="font-black text-gray-900 text-lg">Ticket #{idx + 1}</h5>
+                                <p className="text-xs text-gray-400 font-mono mb-3 bg-gray-50 inline-block px-2 py-0.5 rounded border border-gray-100 break-all">
+                                  {subTicket.subTicketId}
+                                </p>
 
-                            {/* QR renders with correct ID for PDF capture */}
-                            <div id={hasIndividual ? `qr-wrapper-${safeIndex}` : 'qr-wrapper-main'}>
-                              <QRCode
-                                value={getActiveQrValue()}
-                                size={140}
-                                level="H"
-                                className="mb-3"
-                              />
-                            </div>
-                            <span className="text-sm font-black tracking-[0.15em] text-slate-900 text-center break-all">
-                              {getActiveTicketId()}
-                            </span>
-                            <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Scan at Entrance</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* ── ACTION BUTTONS ─────────────────────────────────── */}
-                      <div className="space-y-3">
-
-                        {!splitMode && (
-                          <div className="flex gap-3">
-                            <button onClick={downloadPDF} className="flex-1 py-3 bg-gray-900 text-white font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-gray-800 cursor-pointer transition-colors">
-                              <Download className="w-4 h-4" /> Save PDF
-                            </button>
-                            <button onClick={handleShare} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-blue-700 cursor-pointer transition-colors">
-                              <Share2 className="w-4 h-4" /> Share
-                            </button>
-                          </div>
-                        )}
-
-                        {/* ── SPLIT TICKET SECTION ─────────────────────────── */}
-                        {/* ROOT CAUSE FIX (Split):
-                            - Button hidden when quantity === 1 (was always visible before)
-                            - New mode shows individual tickets with per-ticket share buttons
-                            - Legacy mode (old bookings) shows quantity-based form */}
-                        {canSplit && (
-                          <div className="mt-4 border-t border-gray-200 pt-4">
-                            {!splitMode ? (
-                              <button
-                                onClick={() => setSplitMode(true)}
-                                className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-orange-200 py-3 font-bold text-orange-600 transition-all active:scale-[0.98] hover:bg-orange-50"
-                              >
-                                <Scissors className="h-4 w-4" /> Split & Distribute Tickets
-                              </button>
-                            ) : (
-                              <div className="animate-slide-up rounded-2xl border border-orange-100 bg-orange-50/50 p-4">
-
-                                {/* Split mode header */}
-                                <div className="mb-4 flex items-center justify-between">
-                                  <h4 className="text-sm font-bold text-slate-900">
-                                    {hasIndividual ? 'Share Individual Tickets' : 'Transfer Tickets'}
-                                  </h4>
-                                  <button onClick={() => { setSplitMode(false); setSharingSubTicketId(null); }} className="text-slate-400 hover:text-slate-600 cursor-pointer">
-                                    <X className="h-4 w-4" />
-                                  </button>
-                                </div>
-
-                                {/* ── Mode A: Per-ticket sharing (new bookings with individualTickets) */}
-                                {hasIndividual ? (
-                                  <div className="space-y-3">
-                                    <p className="text-xs text-gray-500 font-medium mb-3">
-                                      Each ticket has its own unique QR. Share a specific ticket to a friend's EventBook account.
-                                    </p>
-                                    {individual.map((subTicket, idx) => (
-                                      <div key={subTicket.subTicketId} className="bg-white rounded-xl border border-gray-200 p-3">
-                                        <div className="flex items-center justify-between">
-                                          <div>
-                                            <span className="text-sm font-bold text-gray-900">Ticket #{idx + 1}</span>
-                                            <span className="block text-[10px] font-mono text-gray-400 mt-0.5">
-                                              {subTicket.subTicketId}
-                                            </span>
-                                          </div>
-                                          <div>
-                                            {subTicket.isTransferred ? (
-                                              <div className="flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg">
-                                                <CheckCircle2 className="w-3 h-3" /> Transferred
-                                              </div>
-                                            ) : subTicket.isCheckedIn ? (
-                                              <div className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-3 py-1.5 rounded-lg">
-                                                <CheckCircle2 className="w-3 h-3" /> Used
-                                              </div>
-                                            ) : sharingSubTicketId === subTicket.subTicketId ? null : (
-                                              <button
-                                                onClick={() => { setSharingSubTicketId(subTicket.subTicketId); setShareEmail(''); }}
-                                                className="flex items-center gap-1 text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
-                                              >
-                                                <Send className="w-3 h-3" /> Share
-                                              </button>
-                                            )}
-                                          </div>
-                                        </div>
-
-                                        {/* Inline email form for this ticket */}
-                                        {sharingSubTicketId === subTicket.subTicketId && (
-                                          <div className="mt-3 space-y-2">
-                                            <input
-                                              type="email"
-                                              value={shareEmail}
-                                              onChange={(e) => setShareEmail(e.target.value)}
-                                              placeholder="friend@example.com"
-                                              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 bg-gray-50"
-                                            />
-                                            <div className="flex gap-2">
-                                              <button
-                                                onClick={() => handleShareSpecificTicket(subTicket.subTicketId)}
-                                                disabled={isSplitting}
-                                                className="flex-1 flex items-center justify-center gap-2 bg-orange-600 text-white text-sm font-bold py-2 rounded-lg cursor-pointer hover:bg-orange-700 disabled:opacity-70 transition-colors"
-                                              >
-                                                {isSplitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                                Transfer
-                                              </button>
-                                              <button
-                                                onClick={() => setSharingSubTicketId(null)}
-                                                className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 cursor-pointer border border-gray-200 rounded-lg"
-                                              >
-                                                Cancel
-                                              </button>
-                                            </div>
-                                          </div>
-                                        )}
-                                      </div>
-                                    ))}
+                                {/* States: Transferred / Used / Share Actions */}
+                                {subTicket.isTransferred ? (
+                                  <div className="inline-flex items-center gap-1.5 text-sm font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg w-full sm:w-auto justify-center">
+                                    <CheckCircle2 className="w-4 h-4" /> Transferred
+                                  </div>
+                                ) : subTicket.isCheckedIn ? (
+                                  <div className="inline-flex items-center gap-1.5 text-sm font-bold text-green-600 bg-green-50 px-3 py-1.5 rounded-lg w-full sm:w-auto justify-center">
+                                    <CheckCircle2 className="w-4 h-4" /> Used at Entry
+                                  </div>
+                                ) : sharingSubTicketId === subTicket.subTicketId ? (
+                                  <div className="mt-1 space-y-2 animate-fade-in w-full">
+                                    <input
+                                      type="email"
+                                      value={shareEmail}
+                                      onChange={(e) => setShareEmail(e.target.value)}
+                                      placeholder="Friend's Email Address"
+                                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 bg-white"
+                                    />
+                                    <div className="flex gap-2">
+                                      <button onClick={() => handleShareSpecificTicket(subTicket.subTicketId)} disabled={isSplitting} className="flex-1 bg-orange-600 text-white text-xs font-bold py-2 rounded-lg cursor-pointer hover:bg-orange-700 disabled:opacity-70 flex items-center justify-center gap-1">
+                                        {isSplitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />} Transfer
+                                      </button>
+                                      <button onClick={() => setSharingSubTicketId(null)} className="px-3 py-2 text-xs font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 cursor-pointer rounded-lg">
+                                        Cancel
+                                      </button>
+                                    </div>
                                   </div>
                                 ) : (
-                                  /* ── Mode B: Legacy quantity split (old bookings) */
-                                  <div className="space-y-3">
-                                    <div>
-                                      <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-500">Friend's Email</label>
-                                      <input
-                                        type="email"
-                                        value={legacyTargetEmail}
-                                        onChange={(e) => setLegacyTargetEmail(e.target.value)}
-                                        placeholder="friend@example.com"
-                                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 bg-white"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-500">
-                                        Tickets to Transfer (Max {selectedTicket.quantity - 1})
-                                      </label>
-                                      <input
-                                        type="number"
-                                        min="1"
-                                        max={selectedTicket.quantity - 1}
-                                        value={legacySplitQuantity}
-                                        onChange={(e) => setLegacySplitQuantity(Number(e.target.value))}
-                                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 bg-white"
-                                      />
-                                    </div>
-                                    <button
-                                      onClick={handleLegacySplit}
-                                      disabled={isSplitting}
-                                      className="mt-2 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-orange-600 py-3 font-bold text-white shadow-md transition-all active:scale-[0.95] hover:bg-orange-700 disabled:opacity-70"
-                                    >
-                                      {isSplitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                                      Transfer Now
+                                  <div className="flex gap-2 w-full mt-1">
+                                    <button onClick={() => shareSubTicketLink(subTicket.subTicketId)} className="flex-1 flex items-center justify-center gap-1.5 bg-gray-100 text-gray-700 font-bold py-2 px-3 rounded-lg hover:bg-gray-200 cursor-pointer transition-colors text-xs">
+                                      <Copy className="w-3 h-3"/> Link
+                                    </button>
+                                    <button onClick={() => { setSharingSubTicketId(subTicket.subTicketId); setShareEmail(''); }} className="flex-1 flex items-center justify-center gap-1.5 bg-orange-50 text-orange-600 font-bold py-2 px-3 rounded-lg hover:bg-orange-100 cursor-pointer transition-colors text-xs">
+                                      <Send className="w-3 h-3"/> Email
                                     </button>
                                   </div>
                                 )}
                               </div>
-                            )}
-                          </div>
-                        )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
 
-                        {/* IP info (localhost only) */}
-                        {!splitMode && isOnlyLocalhost && networkIp && (
-                          <div className="mt-4 flex flex-col items-center gap-1">
-                            <p className="text-xs text-green-600 font-bold flex items-center gap-1">
-                              <Network className="w-3 h-3" /> Dev IP: {networkIp}
-                            </p>
-                            <button onClick={handleResetIp} className="text-[10px] text-gray-400 hover:text-red-500 underline cursor-pointer transition-colors">
-                              Change IP Address
+                      /* ── VIEW B: SINGLE MASTER QR (NORMAL MODE) ─────────────── */
+                      <div className="animate-fade-in">
+                        <div className="relative mb-6 overflow-hidden rounded-3xl bg-slate-900 p-6 text-white shadow-2xl">
+                          <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-orange-500/20 blur-3xl"></div>
+
+                          <div className="mb-6 flex items-start justify-between border-b border-white/10 pb-6 relative z-10">
+                            <div className="pr-4">
+                              <div className="mb-2 inline-block rounded border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-orange-400">
+                                {selectedTicket.itemType === 'Movie' ? 'Cinema Admission' : 'Event Entry'}
+                              </div>
+                              <h3 className="text-2xl font-black leading-tight text-white">
+                                {getTicketTitle(selectedTicket)}
+                              </h3>
+                            </div>
+                            <div className="shrink-0 rounded-xl bg-white/10 px-4 py-2 backdrop-blur-md border border-white/5">
+                              <span className="block text-center text-[10px] font-bold uppercase tracking-widest text-white/50">Admits</span>
+                              <span className="block text-center text-3xl font-black text-white">{selectedTicket.quantity}</span>
+                            </div>
+                          </div>
+
+                          <div className="mb-6 grid grid-cols-2 gap-4 relative z-10">
+                            <div>
+                              <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-white/40">Date & Time</span>
+                              <p className="text-sm font-bold text-white">{getTicketDate(selectedTicket)}</p>
+                              <p className="text-sm font-medium text-orange-300">{getTicketTime(selectedTicket)}</p>
+                            </div>
+                            <div>
+                              <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-white/40">Venue</span>
+                              <p className="text-sm font-bold text-white line-clamp-1">
+                                {selectedTicket.itemType === 'Movie'
+                                  ? (selectedTicket.show?.multiplex?.multiplexName || 'Local Cinema')
+                                  : (selectedTicket.event?.location || 'Venue TBA')}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 flex flex-col items-center justify-center overflow-hidden rounded-2xl bg-white p-6 relative z-10">
+                            <div className="absolute -left-3 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-slate-900"></div>
+                            <div className="absolute -right-3 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-slate-900"></div>
+
+                            {selectedTicket.isCheckedIn && (
+                               <div className="absolute top-2 right-2 flex items-center gap-1 text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded">
+                                 <CheckCircle2 className="w-3 h-3" /> Checked In
+                               </div>
+                            )}
+
+                            <div id="qr-wrapper-main">
+                              {/* Defensive string conversion to prevent react-qr-code crash */}
+                              <QRCode value={buildVerifyUrl(String(selectedTicket.ticketId || ''))} size={140} level="H" className="mb-3" />
+                            </div>
+                            <span className="text-sm font-black tracking-[0.15em] text-slate-900 text-center break-all">
+                              {selectedTicket.ticketId}
+                            </span>
+                            <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Master Scan at Entrance</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="flex gap-3">
+                            <button onClick={downloadPDF} className="flex-1 py-3 bg-gray-900 text-white font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-gray-800 cursor-pointer transition-colors">
+                              <Download className="w-4 h-4" /> Save PDF
+                            </button>
+                            <button onClick={handleShareMain} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-blue-700 cursor-pointer transition-colors shadow-md shadow-blue-600/20">
+                              <Share2 className="w-4 h-4" /> Share Link
                             </button>
                           </div>
-                        )}
+
+                          {canSplit && hasIndividual && (
+                            <div className="pt-2">
+                              <button
+                                onClick={() => setSplitMode(true)}
+                                className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-orange-300 py-3 font-bold text-orange-600 transition-all active:scale-[0.98] hover:bg-orange-50 bg-white shadow-sm"
+                              >
+                                <Scissors className="h-4 w-4" /> Split & Distribute Tickets
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
