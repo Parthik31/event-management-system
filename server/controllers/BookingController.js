@@ -554,10 +554,10 @@ export const splitTicket = async (req, res) => {
     }
 
     // ── Determine which sub-tickets to transfer ─────────────────────────────
-    // Mode A: specific sub-ticket (new per-ticket sharing UI)
-    // Mode B: quantity-based transfer (legacy UI / fallback)
     let subTicketsToTransfer = [];
     let transferQty;
+    let seatsToTransfer = [];
+    let detailsToTransfer = [];
 
     const hasIndividualTickets = Array.isArray(originalBooking.individualTickets) &&
       originalBooking.individualTickets.length > 0;
@@ -567,14 +567,27 @@ export const splitTicket = async (req, res) => {
       const subIdx = hasIndividualTickets
         ? originalBooking.individualTickets.findIndex(t => t.subTicketId === subTicketId && !t.isTransferred)
         : -1;
+      
       if (subIdx === -1) {
         await session.abortTransaction();
         return res.status(400).json({ success: false, message: 'Sub-ticket not found or already transferred.' });
       }
+      
       subTicketsToTransfer = [originalBooking.individualTickets[subIdx]];
       transferQty = 1;
+
+      // CRITICAL FIX: Extract the EXACT seat corresponding to this ticket index
+      if (originalBooking.seats && originalBooking.seats.length > subIdx) {
+        seatsToTransfer = [originalBooking.seats[subIdx]];
+        originalBooking.seats.splice(subIdx, 1); // Remove specific seat
+      }
+      if (originalBooking.seatDetails && originalBooking.seatDetails.length > subIdx) {
+        detailsToTransfer = [originalBooking.seatDetails[subIdx]];
+        originalBooking.seatDetails.splice(subIdx, 1); // Remove specific details
+      }
+
     } else {
-      // Mode B — quantity-based
+      // Mode B — quantity-based (Legacy Fallback)
       transferQty = Number(splitQuantity);
       if (transferQty >= originalBooking.quantity || transferQty <= 0) {
         await session.abortTransaction();
@@ -584,23 +597,20 @@ export const splitTicket = async (req, res) => {
         const untransferred = originalBooking.individualTickets.filter(t => !t.isTransferred);
         subTicketsToTransfer = untransferred.slice(0, transferQty);
       }
+
+      // Legacy slice from end
+      seatsToTransfer = originalBooking.seats.slice(-transferQty);
+      detailsToTransfer = originalBooking.seatDetails ? originalBooking.seatDetails.slice(-transferQty) : [];
+
+      originalBooking.seats = originalBooking.seats.slice(0, -transferQty);
+      originalBooking.seatDetails = originalBooking.seatDetails ? originalBooking.seatDetails.slice(0, -transferQty) : [];
     }
 
     const pricePerTicket = originalBooking.ticketPrice;
     const originalNewQuantity = originalBooking.quantity - transferQty;
 
-    // ── Seats / seatDetails to move ─────────────────────────────────────────
-    const seatsToTransfer = originalBooking.seats.slice(-transferQty);
-    const detailsToTransfer = originalBooking.seatDetails
-      ? originalBooking.seatDetails.slice(-transferQty)
-      : [];
-
     // ── Update original booking ──────────────────────────────────────────────
     originalBooking.quantity = originalNewQuantity;
-    originalBooking.seats = originalBooking.seats.slice(0, -transferQty);
-    originalBooking.seatDetails = originalBooking.seatDetails
-      ? originalBooking.seatDetails.slice(0, -transferQty)
-      : [];
     originalBooking.subtotal = originalNewQuantity * pricePerTicket;
     originalBooking.totalAmount = originalBooking.subtotal + originalBooking.convenienceFee + originalBooking.gatewayCharge;
 

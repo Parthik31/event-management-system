@@ -25,16 +25,10 @@ const ScanTicket = () => {
       // Pause scanner while validating with backend
       scanner.pause(true);
 
-      // ROOT CAUSE FIX: QR codes encode a full URL like:
-      //   https://yourapp.netlify.app/verify/TKT-ABCD-1234
-      // html5-qrcode returns that entire URL as decodedText.
-      // The backend does Booking.findOne({ ticketId }) — it stores "TKT-ABCD-1234",
-      // NOT the full URL. Sending the full URL always returns "Ticket not found."
-      //
-      // Fix: extract just the ticket ID segment after /verify/
+      // CRITICAL FIX: Bulletproof URL extraction preventing trailing slashes or hashes from breaking DB queries
       let resolvedTicketId = decodedText.trim();
       if (resolvedTicketId.includes('/verify/')) {
-        resolvedTicketId = resolvedTicketId.split('/verify/').pop().split('?')[0].trim();
+        resolvedTicketId = resolvedTicketId.split('/verify/')[1].split(/[\/\?#]/)[0].trim();
       }
 
       handleScan(resolvedTicketId, scanner);

@@ -205,9 +205,14 @@ const MyTickets = () => {
       const svg = wrapper ? wrapper.querySelector('svg') : null;
 
       if (svg) {
-        const xml = new XMLSerializer().serializeToString(svg);
+        let xml = new XMLSerializer().serializeToString(svg);
 
-        // Blob URL: works everywhere including iOS Safari (btoa fails on non-ASCII SVG)
+        // CRITICAL FIX: iOS/Safari fails to render SVG blobs without the XMLNS namespace explicitly defined.
+        if (!xml.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+          xml = xml.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+        }
+
+        // Blob URL: works everywhere including iOS Safari
         const svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
         const svgUrl = URL.createObjectURL(svgBlob);
 
