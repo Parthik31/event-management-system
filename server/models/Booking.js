@@ -1,5 +1,20 @@
 import mongoose from 'mongoose';
 
+// ─── Individual ticket slot (1 per person in a multi-ticket purchase) ───────
+// Each booking with qty=N generates N of these, each with its own unique QR code.
+// This allows per-person entry scanning and ticket transfers without splitting
+// the whole booking.
+const individualTicketSchema = new mongoose.Schema(
+  {
+    subTicketId: { type: String, required: true },   // unique QR code value
+    isCheckedIn: { type: Boolean, default: false },
+    checkedInAt: { type: Date, default: null },
+    isTransferred: { type: Boolean, default: false },
+    transferredToEmail: { type: String, default: null }
+  },
+  { _id: false }
+);
+
 const movieSeatDetailSchema = new mongoose.Schema(
   {
     seatId: {
@@ -142,6 +157,16 @@ const bookingSchema = new mongoose.Schema(
     },
     checkInTime: {
       type: Date
+    },
+
+    // 🎫 Individual ticket slots — one per person in a multi-ticket purchase.
+    // Populated at booking creation time (qty N → N entries).
+    // Each slot has its own unique subTicketId used as the QR code value.
+    // Old bookings (before this schema version) will have an empty array here;
+    // the frontend falls back to the main ticketId in that case.
+    individualTickets: {
+      type: [individualTicketSchema],
+      default: []
     }
   },
   { timestamps: true }
