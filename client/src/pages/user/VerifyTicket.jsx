@@ -58,7 +58,27 @@ const VerifyTicket = () => {
     );
   }
 
-  const { event, user, quantity, ticketId } = ticket;
+  // BUG-02 FIX: ticket can be an Event booking OR a Movie booking.
+  // For Movie bookings, ticket.event is null — derive display data safely.
+  const { user, quantity, ticketId, itemType, event, movie, show } = ticket;
+
+  const isMovieTicket = itemType === 'Movie' || (!event && (movie || show));
+
+  const displayTitle   = isMovieTicket
+    ? (movie?.title || show?.movie?.title || 'Movie Ticket')
+    : (event?.title || 'Event Ticket');
+
+  const displayDate    = isMovieTicket
+    ? (show?.date || movie?.releaseDate || 'N/A')
+    : (event?.date || 'N/A');
+
+  const displayTime    = isMovieTicket
+    ? (show?.startTime || 'N/A')
+    : (event?.time || 'N/A');
+
+  const displayVenue   = isMovieTicket
+    ? (show?.multiplex?.multiplexName || show?.multiplex?.name || 'Cinema Hall')
+    : (event?.location || 'N/A');
 
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center px-4 py-8 font-sans">
@@ -70,7 +90,7 @@ const VerifyTicket = () => {
         <div className="bg-white rounded-4xl overflow-hidden shadow-2xl">
           <div className="bg-orange-500 p-8 pt-10 text-center text-white relative">
              <Ticket className="w-12 h-12 mx-auto mb-3 opacity-90" />
-             <h2 className="text-2xl font-black leading-tight mb-1">{event.title}</h2>
+             <h2 className="text-2xl font-black leading-tight mb-1">{displayTitle}</h2>
              {seat && <p className="inline-block bg-white/20 px-3 py-1 rounded-full text-sm font-bold mt-2">Seat / Entry #{seat}</p>}
              
              <div className="absolute -bottom-4 -left-4 w-8 h-8 bg-gray-900 rounded-full"></div>
@@ -86,7 +106,7 @@ const VerifyTicket = () => {
               </div>
               <div>
                 <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-0.5">Date & Time</p>
-                <p className="font-bold text-gray-900">{event.date} at {event.time}</p>
+                <p className="font-bold text-gray-900">{displayDate} at {displayTime}</p>
               </div>
             </div>
 
@@ -96,7 +116,7 @@ const VerifyTicket = () => {
               </div>
               <div>
                 <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-0.5">Venue</p>
-                <p className="font-bold text-gray-900">{event.location}</p>
+                <p className="font-bold text-gray-900">{displayVenue}</p>
               </div>
             </div>
 

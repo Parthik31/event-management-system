@@ -18,7 +18,8 @@ const MyTickets = () => {
 
   const handleSplitTicket = async () => {
     if (!targetEmail.trim()) return toast.error("Please enter your friend's email.");
-    if (splitQuantity >= selectedTicket.quantity || splitQuantity < 1) {
+    const splitQty = Number(splitQuantity); // BUG-08 FIX: always compare as number
+    if (splitQty >= selectedTicket.quantity || splitQty < 1) {
       return toast.error("Invalid transfer quantity.");
     }
 
@@ -26,7 +27,7 @@ const MyTickets = () => {
     try {
       const { data } = await api.post(`/bookings/${selectedTicket._id}/split`, {
         targetEmail: targetEmail.trim(),
-        splitQuantity: Number(splitQuantity)
+        splitQuantity: splitQty
       });
 
       if (data.success) {
@@ -36,8 +37,8 @@ const MyTickets = () => {
         setSplitQuantity(1);
         
         // Optimistic UI Update: Reduce the ticket count locally so they see it instantly
-        setSelectedTicket(prev => ({ ...prev, quantity: prev.quantity - splitQuantity }));
-        setBookings(prev => prev.map(b => b._id === selectedTicket._id ? { ...b, quantity: b.quantity - splitQuantity } : b));
+        setSelectedTicket(prev => ({ ...prev, quantity: prev.quantity - splitQty }));
+        setBookings(prev => prev.map(b => b._id === selectedTicket._id ? { ...b, quantity: b.quantity - splitQty } : b));
         
         // Haptic Feedback for success
         if (typeof window !== 'undefined' && navigator.vibrate) navigator.vibrate([30, 50, 30]); 
@@ -49,7 +50,8 @@ const MyTickets = () => {
     }
   };
   
-  const autoDetectedIp = window.location.hostname !== 'localhost' ? window.location.hostname : '192.168.1.6';
+  // BUG-11 FIX: Use actual hostname as default, not hardcoded '192.168.1.6'
+  const autoDetectedIp = window.location.hostname !== 'localhost' ? window.location.hostname : '';
   const [networkIp, setNetworkIp] = useState(
     localStorage.getItem('eventbook_ip_v3') ||
     localStorage.getItem('eventbook_ip_v2') ||
@@ -172,8 +174,15 @@ const MyTickets = () => {
   };
 
   const getQrValue = useCallback((ticketId) => {
-    const targetHost = networkIp || window.location.hostname;
-    return `http://${targetHost}:5173/verify/${ticketId}`;
+    // BUG-03 FIX: In production (Netlify), use the actual origin.
+    // The old code hardcoded ':5173' port, making prod QR codes point to a non-existent address.
+    // On localhost, if the user has saved a local IP (for cross-device scanning), use it.
+    // Otherwise fall back to window.location.origin which works everywhere.
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocalhost && networkIp) {
+      return `http://${networkIp}:5173/verify/${ticketId}`;
+    }
+    return `${window.location.origin}/verify/${ticketId}`;
   }, [networkIp]);
 
   const handleShare = async () => {

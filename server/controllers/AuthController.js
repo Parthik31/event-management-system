@@ -85,9 +85,14 @@ export const login = async (req, res) => {
 };
 
 export const logout = async (req, res) => {
+  // BUG-05 FIX: Mirror the same secure/sameSite options used during login.
+  // Without these, the httpOnly cookie on a cross-origin (Netlify + Render) setup
+  // may not be cleared in the browser after logout.
   res.cookie('token', 'none', {
     expires: new Date(Date.now() + 10 * 1000),
-    httpOnly: true
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
   });
 
   res.status(200).json({ success: true, message: 'Logged out successfully' });

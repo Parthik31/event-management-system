@@ -137,6 +137,7 @@ api.interceptors.response.use(
         toast.error('Session expired. Please log in again.');
 
         setTimeout(() => {
+          window.isLoggingOut = false; // BUG-06 FIX: reset so future sessions work correctly
           window.location.href = '/login';
         }, 1500);
       }
