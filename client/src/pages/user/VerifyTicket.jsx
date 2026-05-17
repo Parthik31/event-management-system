@@ -18,7 +18,18 @@ const VerifyTicket = () => {
   useEffect(() => {
     const verifyTicket = async () => {
       try {
-        const res = await api.get(`/bookings/verify/${id}`);
+        // 🚀 SMART HOTSPOT FIX: If accessing from phone via 192.168.x.x, 
+        // temporarily rewrite the Axios baseURL to point to the laptop instead of 'localhost'
+        let requestConfig = {};
+        if (window.location.hostname.match(/^(192\.168\.|172\.|10\.)/)) {
+          const currentBase = api.defaults.baseURL || 'http://localhost:5000/api';
+          if (currentBase.includes('localhost') || currentBase.includes('127.0.0.1')) {
+            requestConfig.baseURL = currentBase.replace(/localhost|127\.0\.0\.1/, window.location.hostname);
+          }
+        }
+
+        // Pass the dynamic requestConfig so the phone successfully hits the PC
+        const res = await api.get(`/bookings/verify/${id}`, requestConfig);
         
         if (res.data.success) {
           setTicket(res.data.data);
@@ -30,7 +41,7 @@ const VerifyTicket = () => {
       } catch (error) {
         setInvalid(true);
         if (error.message === 'Network Error') {
-           setErrorMsg('Cannot reach the server. Please check your internet connection.');
+           setErrorMsg('Cannot reach backend server. Make sure your PC firewall allows local network connections.');
         } else {
            setErrorMsg(error.response?.data?.message || 'Verification Failed. Invalid Ticket.');
         }
