@@ -30,6 +30,7 @@ import {
 import { useLiveAnalytics } from '../../../hooks/useLiveAnalytics';
 import { resolveMediaUrl } from '../../../utils/Axios';
 import { formatCurrency, formatNumber, formatDate, formatLastUpdated } from '../../../utils/formatters';
+import { prepareChartData, formatChartDate } from '../../../../../server/utils/chartUtils';
 
 const statusStyles = {
   Approved: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -44,7 +45,7 @@ const MovieDashboard = () => {
   const [statusFilter, setStatusFilter] = useState('All');
 
   const kpis = data?.kpis || {};
-  const chartData = Array.isArray(data?.chart) ? data.chart : [];
+  const chartData = prepareChartData(data?.chart);
   const reports = Array.isArray(data?.reports) ? data.reports : [];
   const topMovies = Array.isArray(data?.topMovies) ? data.topMovies : [];
 

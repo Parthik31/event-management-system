@@ -10,10 +10,25 @@ import User from '../models/User.js';
 const INDIA_TIMEZONE = 'Asia/Kolkata';
 const SIMPLE_EMPTY_FINANCE = { summary: { totalRevenue: 0, payouts: 0, pending: 0 }, chart: [], districts: [], reports: [] };
 
+// ─── DATE LABEL FORMAT ────────────────────────────────────────────────────────
+// ROOT CAUSE (ordering bug): MongoDB's $dateToString with format '%d %b' produces
+// labels like "17 May", "01 Nov". When MongoDB sorts these with $sort: {_id: 1},
+// it uses LEXICOGRAPHIC string order — comparing the DAY NUMBER first.
+// Result: "05 Jun" sorts before "28 Feb" because "0" < "2". This scrambles months.
+//
+// FIX: Use ISO date format '%Y-%m-%d' as the grouping key so MongoDB's $sort: {_id: 1}
+// works correctly (ISO strings ARE lexicographically chronological).
+// The display label 'DD MMM' is derived on the frontend from this ISO key.
 const formatDateLabel = {
-  $dateToString: { format: '%d %b', date: '$createdAt', timezone: INDIA_TIMEZONE }
+  $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: INDIA_TIMEZONE }
 };
 
+// ROOT CAUSE (window bug): old code used get30DaysAgo() but UI labels say "last 14 days".
+// The UI labels say "last 14 days" but the backend sent 30 days of data.
+// FIX: Use exactly 14 days for all organizer + admin finance charts.
+const get14DaysAgo = () => new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+// Admin command-center dashboard intentionally shows a broader 30-day trend.
 const get30DaysAgo = () => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
 const getIndiaDateString = (date = new Date()) =>
@@ -673,7 +688,7 @@ export const getAdminFinanceData = async () => {
       }
     ]),
     Booking.aggregate([
-      { $match: { status: 'Confirmed', createdAt: { $gte: get30DaysAgo() } } },
+      { $match: { status: 'Confirmed', createdAt: { $gte: get14DaysAgo() } } },
       {
         $group: {
           _id: formatDateLabel,
@@ -774,7 +789,7 @@ export const getEventMetrics = async (organizerId) => {
       }
     ]),
     Booking.aggregate([
-      { $match: { event: { $in: eventIds }, status: 'Confirmed', createdAt: { $gte: get30DaysAgo() } } },
+      { $match: { event: { $in: eventIds }, status: 'Confirmed', createdAt: { $gte: get14DaysAgo() } } },
       {
         $group: {
           _id: formatDateLabel,
@@ -872,7 +887,7 @@ export const getMovieMetrics = async (organizerId) => {
       }
     ]),
     Booking.aggregate([
-      { $match: { movie: { $in: movieIds }, status: 'Confirmed', createdAt: { $gte: get30DaysAgo() } } },
+      { $match: { movie: { $in: movieIds }, status: 'Confirmed', createdAt: { $gte: get14DaysAgo() } } },
       {
         $group: {
           _id: formatDateLabel,
@@ -970,7 +985,7 @@ export const getMultiplexMetrics = async (organizerId) => {
       }
     ]),
     Booking.aggregate([
-      { $match: { multiplex: { $in: multiplexIds }, status: 'Confirmed', createdAt: { $gte: get30DaysAgo() } } },
+      { $match: { multiplex: { $in: multiplexIds }, status: 'Confirmed', createdAt: { $gte: get14DaysAgo() } } },
       {
         $group: {
           _id: formatDateLabel,
@@ -1063,7 +1078,7 @@ export const getOrganizerFinanceData = async (params) => {
     return buildEmptyOrganizerFinanceData();
   }
 
-  const chartDateMatch = { createdAt: { $gte: get30DaysAgo() } };
+  const chartDateMatch = { createdAt: { $gte: get14DaysAgo() } };
 
   if (type === 'movie') {
     const movieCatalog = await getOrganizerMovieCatalog(orgObjId);

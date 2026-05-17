@@ -30,6 +30,7 @@ import {
 import { toast } from 'react-hot-toast';
 import api from '../../utils/Axios';
 import { useLiveAnalytics } from '../../hooks/useLiveAnalytics';
+import { prepareChartData, formatChartDate } from '../../../../server/utils/chartUtils';
 
 const currencyFormatter = new Intl.NumberFormat('en-IN', {
   style: 'currency',
@@ -59,7 +60,7 @@ const AdminDashboard = () => {
   const [feedbackByItem, setFeedbackByItem] = useState({});
 
   const kpis = data?.kpis || {};
-  const chartData = Array.isArray(data?.chart) ? data.chart : [];
+  const chartData = prepareChartData(data?.chart, 30);
   const categoryBookings = Array.isArray(data?.categoryBookings) ? data.categoryBookings : [];
   const recentBookings = Array.isArray(data?.recentBookings) ? data.recentBookings : [];
   const organizers = Array.isArray(data?.organizers) ? data.organizers : [];
@@ -162,7 +163,7 @@ const AdminDashboard = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} dy={10} />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} dy={10} tickFormatter={formatChartDate} />
                   <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} tickFormatter={(val) => `₹${val / 1000}k`} />
                   <Tooltip content={<ChartTooltip />} cursor={{ fill: 'transparent' }} />
                   <Line yAxisId="left" type="monotone" dataKey="revenue" stroke="#f97316" strokeWidth={4} dot={false} activeDot={{ r: 8, fill: '#f97316', stroke: '#fff', strokeWidth: 3 }} />

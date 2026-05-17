@@ -23,6 +23,7 @@ import {
 import { useLiveAnalytics } from '../../hooks/useLiveAnalytics';
 import { downloadCsv } from '../../utils/csv';
 import { formatCurrency, formatDate, formatLastUpdated, formatNumber } from '../../utils/formatters';
+import { prepareChartData, formatChartDate } from '../../../../server/utils/chartUtils';
 
 const breakdownColors = ['#f97316', '#fb923c', '#fdba74'];
 
@@ -31,7 +32,7 @@ const AdminFinance = () => {
   const [isExporting, setIsExporting] = useState(false);
 
   const summary = data?.summary || {};
-  const chartData = Array.isArray(data?.chart) ? data.chart : [];
+  const chartData = prepareChartData(data?.chart);
   const categorySplit = Array.isArray(data?.categorySplit) ? data.categorySplit : [];
   const reports = Array.isArray(data?.reports) ? data.reports : [];
 
@@ -119,7 +120,7 @@ const AdminFinance = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData} margin={{ top: 10, right: 12, left: -16, bottom: 0 }}>
                     <CartesianGrid stroke="#fed7aa" strokeDasharray="4 4" vertical={false} />
-                    <XAxis dataKey="date" tickLine={false} axisLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                    <XAxis dataKey="date" tickLine={false} axisLine={false} tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={formatChartDate} />
                     <YAxis tickLine={false} axisLine={false} tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={(value) => formatCurrency(value).replace('.00', '')} />
                     <Tooltip content={<ChartTooltip />} />
                     <Line type="monotone" dataKey="revenue" stroke="#f97316" strokeWidth={3} dot={{ r: 0 }} activeDot={{ r: 5, fill: '#ea580c' }} />

@@ -29,6 +29,7 @@ import { toast } from 'react-hot-toast';
 import { useLiveAnalytics } from '../../../hooks/useLiveAnalytics';
 import api from '../../../utils/Axios';
 import { formatCurrency, formatNumber, formatDate, formatLastUpdated } from '../../../utils/formatters';
+import { prepareChartData, formatChartDate } from '../../../../../server/utils/chartUtils';
 
 const MultiplexDashboard = () => {
   const navigate = useNavigate();
@@ -54,7 +55,7 @@ const MultiplexDashboard = () => {
   }, []);
 
   const kpis = data?.kpis || {};
-  const chartData = Array.isArray(data?.chart) ? data.chart : [];
+  const chartData = prepareChartData(data?.chart);
   const topMovies = Array.isArray(data?.topMovies) ? data.topMovies : [];
   const reports = Array.isArray(data?.reports) ? data.reports : [];
   const management = data?.management || {};
