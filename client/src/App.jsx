@@ -36,8 +36,7 @@ import ManageCoupons from './pages/organizer/operations/ManageCoupons';
 import ManageShowtimes from './pages/organizer/operations/ManageShowtimes';
 import ManageMultiplexes from './pages/organizer/operations/ManageMultiplexes';
 import CreateEvent from './pages/organizer/operations/CreateEvent';
-import CreateMovie from './pages/organizer/operations/CreateMovie';
-import MyEvents from './pages/organizer/operations/MyEvents';
+import CreateMovie from './pages/organizer/operations/CreateMovie';import MyEvents from './pages/organizer/operations/MyEvents';
 import MyMovies from './pages/organizer/operations/MyMovies';
 import Partner from './pages/organizer/operations/Partner';
 

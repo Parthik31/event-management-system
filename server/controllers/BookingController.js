@@ -636,9 +636,13 @@ export const scanAndCheckInTicket = async (req, res) => {
 
     if (!booking) return res.status(404).json({ success: false, message: 'Ticket not found in the system.' });
 
+    // Allow: event organizer, multiplex owner, movie organizer (producer),
+    // or the organizer of the movie linked to the show
     const canScan =
       booking.event?.organizer?._id?.toString() === req.user.id ||
-      booking.multiplex?.owner?._id?.toString() === req.user.id;
+      booking.multiplex?.owner?._id?.toString() === req.user.id ||
+      booking.movie?.organizer?.toString() === req.user.id ||
+      booking.show?.movie?.organizer?.toString() === req.user.id;
 
     if (!canScan) return res.status(403).json({ success: false, message: 'You are not authorized to scan this ticket.' });
     if (booking.status === 'Cancelled') return res.status(400).json({ success: false, message: 'This ticket was cancelled and refunded.' });

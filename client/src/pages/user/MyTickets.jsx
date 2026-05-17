@@ -9,17 +9,9 @@ import { toast } from 'react-hot-toast';
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
-const getDevIp = () => localStorage.getItem('eventbook_dev_ip') || '192.168.1.8';
-
-// Smart URL Builder: Uses dynamic local IP during dev, and real origin in production.
-const buildVerifyUrl = (ticketId) => {
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  if (isLocalhost) {
-    const port = window.location.port || '5173';
-    return `http://${getDevIp()}:${port}/verify/${ticketId || ''}`;
-  }
-  return `${window.location.origin}/verify/${ticketId || ''}`;
-};
+// Always use the real origin — works correctly on both localhost and production.
+const buildVerifyUrl = (ticketId) =>
+  `${window.location.origin}/verify/${ticketId || ''}`;
 
 // ─── COMPONENT ──────────────────────────────────────────────────────────────
 
@@ -33,8 +25,6 @@ const MyTickets = () => {
   const [sharingSubTicketId, setSharingSubTicketId] = useState(null);
   const [shareEmail, setShareEmail] = useState('');
   const [isSplitting, setIsSplitting] = useState(false);
-
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
   // ── Derived helpers ──────────────────────────────────────────────────────
   const getTicketTitle  = useCallback((b) => b.event?.title || b.movie?.title || b.show?.movie?.title || 'Ticket', []);
@@ -81,18 +71,6 @@ const MyTickets = () => {
   };
 
   useEffect(() => { fetchBookings(); }, []);
-
-  // ── Hidden Dev IP Changer ────────────────────────────────────────────────
-  const handleEditDevIp = () => {
-    const currentIp = getDevIp();
-    const newIp = window.prompt("College Hotspot detected? Enter your new laptop IPv4 address:", currentIp);
-    if (newIp && newIp.trim() !== "") {
-      localStorage.setItem('eventbook_dev_ip', newIp.trim());
-      // Force re-render to update QR codes if modal is open
-      setBookings([...bookings]); 
-      toast.success(`Dev IP updated to ${newIp.trim()}`);
-    }
-  };
 
   // ────────────────────────────────────────────────────────────────────────────
   // PDF GENERATOR (MOBILE SAFE)
@@ -299,17 +277,6 @@ const MyTickets = () => {
         
         <div className="flex items-baseline mb-8 gap-4">
           <h1 className="text-3xl font-bold text-gray-900">My Tickets</h1>
-          
-          {/* INVISIBLE DEV TOOL: Only shows on Localhost. Click to change IP easily */}
-          {isLocalhost && (
-            <span 
-              onClick={handleEditDevIp} 
-              className="text-xs text-gray-400 cursor-pointer hover:text-orange-500 transition-colors hidden sm:inline-block"
-              title="Click to change your Dev IP for mobile scanning"
-            >
-              (Dev IP: {getDevIp()} ✎)
-            </span>
-          )}
         </div>
 
         {bookings.length > 0 ? (

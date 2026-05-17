@@ -85,23 +85,12 @@ export const AuthProvider = ({ children }) => {
 
   const clearError = () => dispatch({ type: 'CLEAR_ERROR' });
 
-  const register = async (formData) => {
-    clearError();
-    try {
-      const { data } = await api.post('/auth/register', formData, { skipAuthRedirect: true });
-      dispatch({ type: 'REGISTER_SUCCESS', payload: data.user });
-      return { success: true, user: data.user };
-    } catch (error) {
-      const msg = error.response?.data?.message || 'Registration failed';
-      dispatch({ type: 'REGISTER_FAIL', payload: msg });
-      return { success: false, message: msg };
-    }
-  };
-
   const login = async (formData) => {
     clearError();
     try {
       const { data } = await api.post('/auth/login', formData, { skipAuthRedirect: true });
+      // Store token in localStorage so the Axios Bearer interceptor works as a fallback
+      if (data.token) localStorage.setItem('token', data.token);
       dispatch({ type: 'LOGIN_SUCCESS', payload: data.user });
       return { success: true, user: data.user };
     } catch (error) {
@@ -111,12 +100,28 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const register = async (formData) => {
+    clearError();
+    try {
+      const { data } = await api.post('/auth/register', formData, { skipAuthRedirect: true });
+      // Store token so the Axios Bearer interceptor works as a fallback
+      if (data.token) localStorage.setItem('token', data.token);
+      dispatch({ type: 'REGISTER_SUCCESS', payload: data.user });
+      return { success: true, user: data.user };
+    } catch (error) {
+      const msg = error.response?.data?.message || 'Registration failed';
+      dispatch({ type: 'REGISTER_FAIL', payload: msg });
+      return { success: false, message: msg };
+    }
+  };
+
   const logout = async () => {
     try {
-      await api.get('/auth/logout');
+      await api.post('/auth/logout');
     } catch (error) {
       console.error('Logout Error', error);
     } finally {
+      localStorage.removeItem('token');
       dispatch({ type: 'LOGOUT' });
     }
   };

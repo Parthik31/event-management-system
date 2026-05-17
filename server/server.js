@@ -38,12 +38,16 @@ connectDB();
 
 const app = express();
 
-app.use(helmet()); 
-app.use(morgan('dev')); 
+app.use(helmet());
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-// 👈 FIX 1: CORS MUST BE AT THE VERY TOP (Before any limiters)
+// --- CORS: Use CLIENT_URL env var in production, fallback to allow all in dev ---
+const allowedOrigins = process.env.CLIENT_URL
+  ? [process.env.CLIENT_URL]
+  : true;
+
 app.use(cors({
-  origin: true, // Allows all origins temporarily for local testing
+  origin: allowedOrigins,
   credentials: true
 }));
 
@@ -52,29 +56,34 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 
-// 👈 FIX 2: Increased Limits for Real-Time Polling
-const standardLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 500, // Increased from 100 to 500
-  message: { success: false, message: 'Too many requests, please try again.' }
-});
+// --- RATE LIMITERS ---
 
-const checkoutLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, 
-  max: 30, // Increased to 30 for safety
-  message: { success: false, message: 'Booking limit exceeded.' }
-});
-
+// General API limiter — applies to all /api routes
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 800, // Increased from 100 to 800 to handle background syncing
+  windowMs: 15 * 60 * 1000,
+  max: 800,
   message: { success: false, message: 'Too many requests, please try again.' }
 });
 
-app.use('/api/', standardLimiter);
-app.use('/api/v1/bookings/lock', checkoutLimiter);
-app.use('/api/v1/bookings', checkoutLimiter);
+// Checkout limiter — targeted ONLY at booking creation and seat locking,
+// NOT on GET /my or /organizer which are read-only and polled by the dashboard
+const checkoutLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  message: { success: false, message: 'Booking limit exceeded. Please wait and try again.' }
+});
+
+// Auth limiter — brute-force protection on login and register
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { success: false, message: 'Too many auth attempts. Please try again later.' }
+});
+
 app.use('/api', apiLimiter);
+app.use('/api/v1/bookings/lock', checkoutLimiter);
+app.use('/api/v1/auth/login', authLimiter);
+app.use('/api/v1/auth/register', authLimiter);
 
 // Static Files
 const __filename = fileURLToPath(import.meta.url);
