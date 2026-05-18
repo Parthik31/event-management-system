@@ -9,7 +9,8 @@ import { toast } from 'react-hot-toast';
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
-const getDevIp = () => localStorage.getItem('eventbook_dev_ip') || '192.168.1.8';
+// 🚀 UPDATED: Now defaults to your specific 10.76.162.250 IP
+const getDevIp = () => localStorage.getItem('eventbook_dev_ip') || '10.76.162.250';
 
 // Smart URL Builder: Uses dynamic local IP during dev, and real origin in production.
 const buildVerifyUrl = (ticketId) => {
